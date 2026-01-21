@@ -40,10 +40,12 @@ RUN if grep -q "archive.debian.org" /etc/apt/sources.list 2>/dev/null; then \
 
 {% if ('mswebench' in base_image) %}
 # For mswebench images, install minimal dependencies with optional package handling
+# CRITICAL: Must include tmux for OpenHands agent to work!
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         wget curl ca-certificates sudo git jq \
-        coreutils util-linux procps findutils grep sed || true && \
+        coreutils util-linux procps findutils grep sed \
+        tmux build-essential || true && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 {% elif ('ubuntu' in base_image) %}
 RUN apt-get update && \
