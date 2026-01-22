@@ -58,6 +58,7 @@ data/*.jsonl
 *.log
 logs/
 
+# Config with secrets (use config.toml.example as template)
 
 # Docker
 *.tar
