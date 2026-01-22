@@ -73,13 +73,22 @@ export USE_INSTANCE_IMAGE=true
 
 ## Configuration
 
-First, copy the example configuration:
+⚠️  **IMPORTANT**: The repository includes `config.toml` with placeholder API keys.
+
+**Before running, you MUST add your actual API keys:**
 
 ```bash
-cp config.toml.example config.toml
+# Edit config.toml and replace placeholders
+nano config.toml  # or use your preferred editor
 ```
 
-Then edit `config.toml` to add your API keys:
+**Required API Keys:**
+- `YOUR_OPENAI_API_KEY_HERE` → Your OpenAI API key
+- `YOUR_ANTHROPIC_API_KEY_HERE` → Your Anthropic/Claude API key  
+- `YOUR_MOONSHOT_API_KEY_HERE` → Your Moonshot/Kimi API key
+- `YOUR_QWEN_API_KEY_HERE` → Your Qwen API key/endpoint
+
+**Note:** `config.toml` is included in the repository (not gitignored) to simplify setup and avoid Poetry dependency issues. If you fork this repo, ensure you don't commit your actual API keys - replace them with placeholders before pushing.
 
 ### LLM Providers
 
