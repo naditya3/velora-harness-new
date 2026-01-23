@@ -242,9 +242,12 @@ def extract_model_patch(trajectory: Dict[str, Any]) -> str:
     
     # ONLY exact artifact filenames from OpenHands workspace
     # These are NOT code - they're agent execution metadata
+    # Also exclude test infrastructure that exists in Docker images
     EXCLUDED_FILES = [
         'command', 'exec_time', 'exit_code', 'stdout', 'stderr',
-        'test_output', 'test_log', '.test_', '_test_output'
+        'test_output', 'test_log', '.test_', '_test_output',
+        'unittest_loader_no_traceback.py',  # Test runner infrastructure (baked in images)
+        'unittest_loader.py'  # Test runner infrastructure (baked in images)
     ]
     
     lines = git_patch.split('\n')
@@ -553,7 +556,10 @@ def evaluate_instance(
         # Step 1: Load trajectory
         logger.info(f"Loading trajectory from {trajectory_file}")
         with open(trajectory_file, 'r') as f:
-            trajectory = json.loads(f.readline())
+            # All corrected delivery trajectories are single JSON objects (formatted or compact)
+            # Just read and parse the entire file
+            content = f.read().strip()
+            trajectory = json.loads(content)
         
         instance_id = trajectory.get('instance_id', 'unknown')
         model_patch = extract_model_patch(trajectory)
@@ -564,41 +570,24 @@ def evaluate_instance(
         # Step 2: Load dataset
         logger.info(f"Loading dataset from {dataset_file}")
         with open(dataset_file, 'r') as f:
-            for line in f:
-                if line.strip():
-                    dataset = json.loads(line)
-                    if dataset.get('instance_id') == instance_id:
-                        break
-            else:
-                raise ValueError(f"Instance {instance_id} not found in dataset")
+            # Datasets are single JSON objects (formatted or compact), not JSONL
+            # Just read and parse the entire file (same as trajectory loading)
+            content = f.read().strip()
+            dataset = json.loads(content)
+
+            # Verify instance ID matches
+            if dataset.get('instance_id') != instance_id:
+                raise ValueError(f"Instance ID mismatch: expected {instance_id}, got {dataset.get('instance_id')}")
         
         # FIX: Use trajectory's instance field as primary source, fallback to dataset
         # The trajectory's instance field contains complete data from OpenHands
         traj_instance = trajectory.get('instance', {})
-        
-        # Parse fields - prefer trajectory instance over dataset file
-        fail_to_pass = traj_instance.get('FAIL_TO_PASS') or dataset.get('FAIL_TO_PASS', [])
-        pass_to_pass = traj_instance.get('PASS_TO_PASS') or dataset.get('PASS_TO_PASS', [])
-        test_command = traj_instance.get('test_command') or dataset.get('test_command', 'pytest')
-        test_output_parser = traj_instance.get('test_output_parser') or dataset.get('test_output_parser', 'python/parse_log_pytest_v3')
-        test_patch = traj_instance.get('test_patch') or dataset.get('test_patch', '')
-        
-        # #region agent log
-        import ast
-        debug_log_path = "/Users/macbookpro/Desktop/SWETEs7/.cursor/debug.log"
-        def _debug_log(msg, data, hyp):
-            import time
-            try:
-                with open(debug_log_path, 'a') as f:
-                    f.write(json.dumps({"timestamp": int(time.time()*1000), "message": msg, "data": data, "hypothesisId": hyp, "location": "eval_pilot2_standardized.py:565"}) + '\n')
-            except: pass
-        _debug_log("F2P raw value", {"type": str(type(fail_to_pass)), "first_100": str(fail_to_pass)[:100], "is_string": isinstance(fail_to_pass, str)}, "A")
-        _debug_log("P2P raw value", {"type": str(type(pass_to_pass)), "first_100": str(pass_to_pass)[:100], "is_string": isinstance(pass_to_pass, str)}, "A")
-        # #endregion
-        
+
         # FIX: Handle both JSON and Python literal formats
         # Some datasets store F2P/P2P as Python literals with single quotes: ['test1', 'test2']
         # json.loads() fails on these, so we fallback to ast.literal_eval()
+        import ast
+
         def _parse_list_field(value):
             """Parse a list field that may be JSON, Python literal, or already a list."""
             if isinstance(value, list):
@@ -620,15 +609,26 @@ def evaluate_instance(
             # Last resort: return empty list
             logger.warning(f"Could not parse list field: {value[:50]}...")
             return []
-        
-        fail_to_pass = _parse_list_field(fail_to_pass)
-        pass_to_pass = _parse_list_field(pass_to_pass)
-        
-        # #region agent log
-        _debug_log("F2P after parse", {"count": len(fail_to_pass), "type": str(type(fail_to_pass)), "first_3": fail_to_pass[:3] if fail_to_pass else []}, "A")
-        _debug_log("P2P after parse", {"count": len(pass_to_pass), "type": str(type(pass_to_pass)), "first_3": pass_to_pass[:3] if pass_to_pass else []}, "A")
-        # #endregion
-        
+
+        # Parse fields from trajectory, but if empty after parsing, use dataset
+        fail_to_pass = _parse_list_field(traj_instance.get('FAIL_TO_PASS'))
+        if not fail_to_pass:  # If trajectory has empty list, fallback to dataset
+            fail_to_pass = _parse_list_field(dataset.get('FAIL_TO_PASS', []))
+
+        pass_to_pass = _parse_list_field(traj_instance.get('PASS_TO_PASS'))
+        if not pass_to_pass:  # If trajectory has empty list, fallback to dataset
+            pass_to_pass = _parse_list_field(dataset.get('PASS_TO_PASS', []))
+
+        # Parse test_command with proper empty string handling
+        test_command = traj_instance.get('test_command') or dataset.get('test_command') or 'pytest'
+        # If test_command is empty string, use default
+        if not test_command or not test_command.strip():
+            test_command = 'pytest --no-header -rA --tb=no -p no:cacheprovider'
+            logger.warning(f"Empty test_command in dataset, using default: {test_command}")
+
+        test_output_parser = traj_instance.get('test_output_parser') or dataset.get('test_output_parser', 'python/parse_log_pytest_v3')
+        test_patch = traj_instance.get('test_patch') or dataset.get('test_patch', '')
+
         logger.info(f"F2P tests: {len(fail_to_pass)}")
         logger.info(f"P2P tests: {len(pass_to_pass)}")
         logger.info(f"Test command: {test_command[:80]}...")
@@ -824,7 +824,10 @@ Examples:
     # Save results
     # Load original trajectory to merge
     with open(args.trajectory_file, 'r') as f:
-        original = json.loads(f.readline())
+        # All corrected delivery trajectories are single JSON objects (formatted or compact)
+        # Just read and parse the entire file
+        content = f.read().strip()
+        original = json.loads(content)
     
     # Add eval details
     original['pilot2_eval_details'] = asdict(report)
