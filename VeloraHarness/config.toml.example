@@ -138,7 +138,7 @@ attention_window = 50
 # GPT-4 / GPT-5 for coding tasks
 [llm.gpt]
 model = "gpt-4o"
-api_key = "YOUR_OPENAI_API_KEY"
+api_key = ""
 temperature = 0.2
 max_input_tokens = 120000
 max_output_tokens = 65536

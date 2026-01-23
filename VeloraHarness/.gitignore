@@ -53,6 +53,9 @@ htmlcov/
 outputs/
 data/*.jsonl
 !data/sample_task.jsonl
+hi/
+jsonls/
+.eval_sessions/
 
 # Logs
 *.log
