@@ -36,8 +36,9 @@ export LANGUAGE=python                      # Our tasks are Python
 export RUN_WITH_BROWSING=false
 export USE_HINT_TEXT=false
 
-# Skip runtime build - use task's Docker image directly
-export RUNTIME_CONTAINER_IMAGE="skip"
+# NOTE: Do NOT set RUNTIME_CONTAINER_IMAGE
+# OpenHands will build runtime FROM the instance image
+# With our fixes (docker.py + Dockerfile.j2), the build will succeed
 
 # ============================================
 # ARGUMENT PARSING
@@ -91,7 +92,6 @@ echo "  DOCKER_BUILDKIT: $DOCKER_BUILDKIT"
 echo "  EVAL_DOCKER_IMAGE_PREFIX: $EVAL_DOCKER_IMAGE_PREFIX"
 echo "  USE_INSTANCE_IMAGE: $USE_INSTANCE_IMAGE"
 echo "  LANGUAGE: $LANGUAGE"
-echo "  RUNTIME_CONTAINER_IMAGE: $RUNTIME_CONTAINER_IMAGE"
 echo "============================================"
 echo ""
 
@@ -368,6 +368,14 @@ SCRIPT_DIR=$(dirname "$0")
 EVAL_SCRIPT="$SCRIPT_DIR/eval_pilot2_standardized.py"
 EVAL_OUTPUT_FILE="${OUTPUT_DIR}/eval_pilot2_output.jsonl"
 
+# ============================================
+# EXPORT VARIABLES FOR PYTHON POST-PROCESSING
+# ============================================
+export INSTANCE_ID
+export OUTPUT_DIR
+export EVAL_OUTPUT_FILE
+
+
 # Verify eval script exists
 if [ ! -f "$EVAL_SCRIPT" ]; then
   echo "ERROR: Evaluation script not found: $EVAL_SCRIPT"
@@ -479,12 +487,8 @@ with open(patch_file, 'w') as f:
 
 print(f"Created: {patch_file}")
 
-# Create aggregate report.json in eval_outputs root
-aggregate_report_file = os.path.join(eval_outputs_dir, 'report.json')
-with open(aggregate_report_file, 'w') as f:
-    json.dump(report, f, indent=4)
-
-print(f"Created: {aggregate_report_file}")
+# Note: Aggregate report.json removed - only instance-specific report needed
+# This matches standard SWE-bench eval_outputs structure
 
 # Print summary
 print("")
