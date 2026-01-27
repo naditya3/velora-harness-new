@@ -309,6 +309,13 @@ def get_instruction(instance: pd.Series, metadata: EvalMetadata):
 #     else:
 #         return image_name.lower() ##加载本地的
 def get_instance_docker_image(instance: pd.Series):
+    # FIRST: Check if image_storage_uri is provided in the dataset
+    image_storage_uri = instance.get("image_storage_uri", "")
+    if image_storage_uri and pd.notna(image_storage_uri) and str(image_storage_uri).strip():
+        logger.info(f"Using image_storage_uri from dataset: {image_storage_uri}")
+        return str(image_storage_uri).strip()
+
+    # FALLBACK: Original logic to construct from instance_id
     if LANGUAGE == 'python':
         image_name = 'sweb.eval.x86_64.' + instance['instance_id']
         image_name = image_name.replace(
