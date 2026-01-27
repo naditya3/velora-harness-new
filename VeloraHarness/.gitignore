@@ -58,9 +58,6 @@ data/*.jsonl
 *.log
 logs/
 
-# Config with secrets (use config.toml.example as template)
-config.toml
-
 # Docker
 *.tar
 
@@ -72,9 +69,6 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
-
-# Poetry
-poetry.lock
 
 # LLM completions and evaluation outputs
 llm_completions/
