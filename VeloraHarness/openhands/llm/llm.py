@@ -40,6 +40,17 @@ from openhands.llm.fn_call_converter import (
 )
 from openhands.llm.retry_mixin import RetryMixin
 
+# Import native Gemini handler for thought_signature support
+try:
+    from openhands.llm.gemini_native import (
+        native_gemini_completion,
+        should_use_native_gemini,
+    )
+    NATIVE_GEMINI_AVAILABLE = True
+except ImportError:
+    NATIVE_GEMINI_AVAILABLE = False
+    logger.warning('Native Gemini SDK not available - thought_signatures not supported')
+
 __all__ = ['LLM']
 
 # tuple of exceptions to retry on
@@ -267,6 +278,37 @@ class LLM(RetryMixin, DebugMixin):
 
             kwargs['messages'] = messages
 
+            # Check if we should use native Gemini SDK for thought_signature support
+            if NATIVE_GEMINI_AVAILABLE and should_use_native_gemini(
+                self.config.model, self.config.completion_kwargs
+            ):
+                logger.info(
+                    f'Using native GenAI SDK for {self.config.model} with thinking support'
+                )
+                try:
+                    resp = native_gemini_completion(
+                        model=self.config.model,
+                        messages=messages,
+                        tools=kwargs.get('tools'),
+                        api_key=self.config.api_key.get_secret_value() if self.config.api_key else None,
+                        completion_kwargs=self.config.completion_kwargs,
+                        **kwargs
+                    )
+                    # Convert to ModelResponse if needed
+                    if not isinstance(resp, ModelResponse):
+                        resp = ModelResponse(**resp)
+
+                    # Log the response
+                    self.log_response(resp)
+
+                    # Calculate cost
+                    cost = self._post_completion(resp)
+
+                    return resp
+                except Exception as e:
+                    logger.error(f'Native Gemini SDK failed: {e}, falling back to liteLLM')
+                    # Fall through to use liteLLM as fallback
+
             # handle conversion of to non-function calling messages if needed
             original_fncall_messages = copy.deepcopy(messages)
             mock_fncall_tools = None
@@ -399,6 +441,22 @@ class LLM(RetryMixin, DebugMixin):
                             logger.debug(
                                 f'Translated Kimi <finish> tag to finish tool call: {finish_message[:100]}...'
                             )
+
+            # Handle Gemini 3 Pro thinking blocks with thought signatures
+            # Gemini 3 models with thinking enabled return thinking_blocks that contain thought_signatures
+            # These must be preserved in message object for liteLLM to include them in subsequent calls
+            if 'gemini' in self.config.model.lower() and resp.choices and len(resp.choices) > 0:
+                msg = resp.choices[0].message
+
+                # Check if response contains thinking_blocks (present in raw response from liteLLM)
+                thinking_blocks = getattr(msg, 'thinking_blocks', None)
+                if thinking_blocks:
+                    logger.debug(
+                        f'Gemini response contains {len(thinking_blocks)} thinking blocks with signatures'
+                    )
+                    # thinking_blocks are already part of the message object from liteLLM
+                    # They will be automatically preserved if we pass the message back in history
+                    # No additional action needed - liteLLM handles this
 
             non_fncall_response = copy.deepcopy(resp)
 
