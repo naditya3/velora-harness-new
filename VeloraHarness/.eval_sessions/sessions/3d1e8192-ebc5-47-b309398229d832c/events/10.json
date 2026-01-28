@@ -1,0 +1,1 @@
+{"id": 10, "timestamp": "2026-01-28T06:28:29.481525", "source": "agent", "message": "Parameter 'task_list' is expected to be an array.", "observation": "error", "content": "Parameter 'task_list' is expected to be an array.", "extras": {"error_id": ""}}

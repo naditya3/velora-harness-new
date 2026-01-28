@@ -17,7 +17,7 @@ runtime = "docker"
 
 [llm.gpt]
 model = "gpt-5.1-2025-11-13"
-api_key = "YOUR_OPENAI_API_KEY_HERE"  # ← ADD YOUR KEY
+api_key = "REDACTED_OPENAI_API_KEY"  # ← ADD YOUR KEY
 temperature = 0.2
 max_input_tokens = 120000
 max_output_tokens = 65536
@@ -40,6 +40,12 @@ model = "qwen"
 api_key = "YOUR_QWEN_API_KEY_HERE"  # ← ADD YOUR KEY
 base_url = "YOUR_QWEN_ENDPOINT_HERE"
 temperature = 0.2
+
+[llm.gemini3]
+model = "gemini/gemini-3-pro-preview"
+api_key = "REDACTED_GOOGLE_API_KEY"
+reasoning_effort = "high"  # Options: "low", "medium", "high", "none"
+native_tool_calling=false
 
 #################################### Sandbox ###################################
 [sandbox]

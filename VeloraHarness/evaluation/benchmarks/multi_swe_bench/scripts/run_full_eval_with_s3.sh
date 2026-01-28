@@ -3,7 +3,7 @@
 #
 # This script:
 #   1. Downloads Docker image from S3 based on dataset
-#   2. Loads and tags the image for OpenHands
+#   2. Loads and tags the image for OpenHands (with tmux fix if needed)
 #   3. Runs trajectory generation (run_infer.py)
 #   4. Runs patch evaluation (eval_pilot2_standardized.py)
 #   5. Creates OpenHands-format reports
@@ -13,6 +13,8 @@
 #   ├── output.jsonl              ← Trajectory + git_patch
 #   ├── metadata.json             ← Run metadata
 #   ├── llm_completions/          ← LLM responses
+#   ├── logs/                     ← Execution logs
+#   ├── eval_pilot2_output.jsonl  ← Raw evaluation results
 #   └── eval_outputs/             ← Evaluation results
 #       ├── report.json           ← Aggregate report
 #       └── <instance_id>/
@@ -21,8 +23,8 @@
 #           ├── test_output.txt   ← Full test output
 #           └── run_instance.log  ← Execution log
 #
-# Usage: ./run_full_eval_with_s3.sh MODEL_CONFIG DATASET [EVAL_LIMIT] [MAX_ITER] [NUM_WORKERS]
-# Example: ./run_full_eval_with_s3.sh llm.gpt data/task.jsonl 1 30 1
+# Usage: ./run_full_eval_with_s3.sh MODEL_CONFIG DATASET [EVAL_LIMIT] [MAX_ITER] [NUM_WORKERS] [AGENT]
+# Example: ./run_full_eval_with_s3.sh llm.gemini3 /path/to/dataset.jsonl 1 30 1
 
 set -eo pipefail
 
@@ -36,8 +38,10 @@ export LANGUAGE=python                      # Our tasks are Python
 export RUN_WITH_BROWSING=false
 export USE_HINT_TEXT=false
 
-# Skip runtime build - use task's Docker image directly
-export RUNTIME_CONTAINER_IMAGE="skip"
+# Note: RUNTIME_CONTAINER_IMAGE="skip" removed - it causes "invalid reference format" errors
+
+# Add current directory to PYTHONPATH for openhands module resolution
+export PYTHONPATH="$(pwd):$PYTHONPATH"
 
 # ============================================
 # ARGUMENT PARSING
@@ -54,8 +58,12 @@ SPLIT="train"
 # VALIDATION
 # ============================================
 if [ -z "$MODEL_CONFIG" ]; then
-  echo "ERROR: MODEL_CONFIG is required (e.g., llm.gpt, llm.claude, llm.kimi)"
+  echo "ERROR: MODEL_CONFIG is required (e.g., llm.gpt, llm.claude, llm.gemini3)"
   echo "Usage: $0 MODEL_CONFIG DATASET [EVAL_LIMIT] [MAX_ITER] [NUM_WORKERS] [AGENT]"
+  echo ""
+  echo "Examples:"
+  echo "  $0 llm.gemini3 /path/to/dataset.jsonl 1 30 1"
+  echo "  $0 llm.gpt /path/to/dataset.jsonl 1 200 1"
   exit 1
 fi
 
@@ -91,7 +99,6 @@ echo "  DOCKER_BUILDKIT: $DOCKER_BUILDKIT"
 echo "  EVAL_DOCKER_IMAGE_PREFIX: $EVAL_DOCKER_IMAGE_PREFIX"
 echo "  USE_INSTANCE_IMAGE: $USE_INSTANCE_IMAGE"
 echo "  LANGUAGE: $LANGUAGE"
-echo "  RUNTIME_CONTAINER_IMAGE: $RUNTIME_CONTAINER_IMAGE"
 echo "============================================"
 echo ""
 
@@ -114,6 +121,9 @@ if [ -z "$INSTANCE_ID" ]; then
 fi
 
 echo "Instance ID: $INSTANCE_ID"
+
+# Export INSTANCE_ID for later use in Python scripts
+export INSTANCE_ID
 
 # Extract image info
 IMAGE_URI=$(cat "$DATASET_ABS" | python3 -c "
@@ -202,15 +212,81 @@ echo "Original image: $IMAGE_URI"
 echo "Tag 1: $TAG1"
 echo "Tag 2: $TAG2"
 
-docker tag "$IMAGE_URI" "$TAG1"
-docker tag "$IMAGE_URI" "$TAG2"
+# Function to fix Docker image with tmux
+fix_docker_image_with_tmux() {
+  local SOURCE_IMAGE=$1
+  local TARGET_TAG=$2
 
-echo "✓ Image tagged successfully"
+  echo "Fixing Docker image: installing tmux..."
+
+  # Create a temporary container
+  CONTAINER_ID=$(docker run -d --entrypoint /bin/bash "$SOURCE_IMAGE" -c "sleep 300")
+
+  # Fix apt sources and install tmux
+  docker exec "$CONTAINER_ID" bash -c '
+    # Fix apt sources for Ubuntu Jammy
+    cat > /etc/apt/sources.list << "EOF"
+deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
+EOF
+    # Clear proxy settings
+    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+    export http_proxy="" https_proxy=""
+    # Update and install tmux
+    apt-get update && apt-get install -y tmux
+  '
+
+  if [ $? -eq 0 ]; then
+    # Commit the fixed container as a new image
+    docker commit "$CONTAINER_ID" "$TARGET_TAG"
+    echo "✓ Fixed image committed as: $TARGET_TAG"
+  else
+    echo "WARNING: Failed to install tmux, continuing with original image"
+    docker tag "$SOURCE_IMAGE" "$TARGET_TAG"
+  fi
+
+  # Cleanup
+  docker stop "$CONTAINER_ID" >/dev/null 2>&1 || true
+  docker rm "$CONTAINER_ID" >/dev/null 2>&1 || true
+}
+
+# Check if TAG1 already exists and has tmux (fixed image)
+if docker run --rm --entrypoint /bin/bash "$TAG1" -c "which tmux" >/dev/null 2>&1; then
+  echo "✓ Fixed image already exists with tmux - skipping re-tag"
+else
+  # Check if the source image has tmux
+  if docker run --rm --entrypoint /bin/bash "$IMAGE_URI" -c "which tmux" >/dev/null 2>&1; then
+    echo "Source image has tmux, tagging directly..."
+    docker tag "$IMAGE_URI" "$TAG1"
+    docker tag "$IMAGE_URI" "$TAG2"
+    echo "✓ Image tagged successfully"
+  else
+    echo "Source image missing tmux - fixing..."
+    fix_docker_image_with_tmux "$IMAGE_URI" "$TAG1"
+    docker tag "$TAG1" "$TAG2"
+    echo "✓ Fixed image tagged successfully"
+  fi
+fi
 
 # Verify tags
 echo ""
 echo "Verifying tags:"
 docker images | grep -E "(${INSTANCE_ID}|${REPO_M})" | head -5
+
+# ============================================
+# CLEAN UP OLD RUNTIME IMAGES (if any)
+# ============================================
+echo ""
+echo "Cleaning up old OpenHands runtime images..."
+OLD_RUNTIME_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep "ghcr.io/openhands/runtime" | head -5 || true)
+if [ -n "$OLD_RUNTIME_IMAGES" ]; then
+  echo "Found old runtime images, removing..."
+  echo "$OLD_RUNTIME_IMAGES" | xargs -r docker rmi -f 2>/dev/null || true
+  echo "✓ Old runtime images cleaned up"
+else
+  echo "✓ No old runtime images to clean"
+fi
 
 # ============================================
 # GET OPENHANDS VERSION
@@ -282,17 +358,22 @@ echo "Model name: $MODEL_NAME"
 # Find the output directory - search for directories containing output.jsonl
 OUTPUT_BASE="evaluation/evaluation_outputs/outputs"
 
-# Find the actual output.jsonl file first
-OUTPUT_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" -mmin -30 2>/dev/null | grep -E "${current_eval_note}" | head -1)
+# Find the actual output.jsonl file first - try with current_eval_note AND instance_id
+OUTPUT_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" 2>/dev/null | grep "${INSTANCE_ID}" | grep -E "${current_eval_note}" | head -1)
 
 if [ -z "$OUTPUT_FILE" ]; then
-  # Try alternate search by iteration count
-  OUTPUT_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" -mmin -30 2>/dev/null | grep "maxiter_${MAX_ITER}" | head -1)
+  # Try alternate search by instance_id and iteration count
+  OUTPUT_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" 2>/dev/null | grep "${INSTANCE_ID}" | grep "maxiter_${MAX_ITER}" | head -1)
 fi
 
 if [ -z "$OUTPUT_FILE" ]; then
-  # Last resort: find most recent output.jsonl
-  OUTPUT_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" -mmin -30 2>/dev/null | head -1)
+  # Try search by instance_id only
+  OUTPUT_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" 2>/dev/null | grep "${INSTANCE_ID}" | head -1)
+fi
+
+if [ -z "$OUTPUT_FILE" ]; then
+  # Last resort: find most recent output.jsonl (sorted by modification time)
+  OUTPUT_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 fi
 
 if [ -z "$OUTPUT_FILE" ]; then
@@ -313,6 +394,9 @@ if [ ! -f "$OUTPUT_FILE" ]; then
   echo "ERROR: Output file not found: $OUTPUT_FILE"
   exit 1
 fi
+
+# Export OUTPUT_DIR for later use
+export OUTPUT_DIR
 
 # ============================================
 # VERIFY INSTANCE ID MATCHES
@@ -368,6 +452,9 @@ SCRIPT_DIR=$(dirname "$0")
 EVAL_SCRIPT="$SCRIPT_DIR/eval_pilot2_standardized.py"
 EVAL_OUTPUT_FILE="${OUTPUT_DIR}/eval_pilot2_output.jsonl"
 
+# Export for Python script
+export EVAL_OUTPUT_FILE
+
 # Verify eval script exists
 if [ ! -f "$EVAL_SCRIPT" ]; then
   echo "ERROR: Evaluation script not found: $EVAL_SCRIPT"
@@ -380,6 +467,10 @@ DOCKER_IMAGE="$TAG1"
 echo "Docker image for evaluation: $DOCKER_IMAGE"
 echo "Evaluation script: $EVAL_SCRIPT"
 
+# Create run_instance.log
+RUN_LOG="${OUTPUT_DIR}/eval_outputs/${INSTANCE_ID}/run_instance.log"
+mkdir -p "$(dirname "$RUN_LOG")"
+
 EVAL_COMMAND="python3 $EVAL_SCRIPT \
   --trajectory-file $OUTPUT_FILE \
   --dataset-file $DATASET_ABS \
@@ -389,9 +480,11 @@ EVAL_COMMAND="python3 $EVAL_SCRIPT \
 
 echo "Running: $EVAL_COMMAND"
 echo ""
-eval $EVAL_COMMAND
 
-EVAL_EXIT=$?
+# Run evaluation and capture output to log
+eval $EVAL_COMMAND 2>&1 | tee "$RUN_LOG"
+
+EVAL_EXIT=${PIPESTATUS[0]}
 
 if [ $EVAL_EXIT -ne 0 ]; then
   echo "ERROR: Evaluation failed with exit code $EVAL_EXIT"
@@ -406,16 +499,25 @@ echo "============================================"
 echo "GENERATING OPENHANDS-FORMAT REPORT"
 echo "============================================"
 
-python3 << 'PYEOF'
+# Run Python script with proper environment variables
+python3 << PYEOF
 import json
 import os
 import sys
 
-# Load eval_pilot2 output
-eval_output_file = os.environ['EVAL_OUTPUT_FILE']
-output_dir = os.environ['OUTPUT_DIR']
-instance_id = os.environ['INSTANCE_ID']
+# Get environment variables
+eval_output_file = os.environ.get('EVAL_OUTPUT_FILE', '')
+output_dir = os.environ.get('OUTPUT_DIR', '')
+instance_id = os.environ.get('INSTANCE_ID', '')
 
+if not eval_output_file or not output_dir or not instance_id:
+    print("ERROR: Missing environment variables")
+    print(f"  EVAL_OUTPUT_FILE: {eval_output_file}")
+    print(f"  OUTPUT_DIR: {output_dir}")
+    print(f"  INSTANCE_ID: {instance_id}")
+    sys.exit(1)
+
+# Load eval_pilot2 output
 with open(eval_output_file, 'r') as f:
     data = json.load(f)
 
@@ -506,6 +608,11 @@ print("=" * 60)
 
 PYEOF
 
+REPORT_EXIT=$?
+if [ $REPORT_EXIT -ne 0 ]; then
+  echo "WARNING: Report generation had issues (exit code: $REPORT_EXIT)"
+fi
+
 # ============================================
 # SUMMARY
 # ============================================
@@ -530,8 +637,8 @@ if [ -d "$EVAL_OUTPUTS_DIR" ]; then
   # Show individual instance report
   for instance_dir in "$EVAL_OUTPUTS_DIR"/*/; do
     if [ -d "$instance_dir" ]; then
-      instance_id=$(basename "$instance_dir")
-      echo "Instance: $instance_id"
+      inst_id=$(basename "$instance_dir")
+      echo "Instance: $inst_id"
       echo "  Files: $(ls "$instance_dir" 2>/dev/null | tr '\n' ' ')"
 
       if [ -f "${instance_dir}report.json" ]; then
@@ -557,6 +664,53 @@ except Exception as e:
     fi
   done
 fi
+
+# ============================================
+# POST-RUN CLEANUP
+# ============================================
+echo ""
+echo "============================================"
+echo "POST-RUN CLEANUP"
+echo "============================================"
+
+# Clean up the Docker images created for this evaluation
+# This ensures the next evaluation can run without disk space issues
+
+echo "Cleaning up evaluation Docker images..."
+
+# Remove the tagged images (TAG1 and TAG2)
+if [ -n "$TAG1" ]; then
+  docker rmi -f "$TAG1" 2>/dev/null && echo "✓ Removed: $TAG1" || echo "  (already removed or in use)"
+fi
+
+if [ -n "$TAG2" ]; then
+  docker rmi -f "$TAG2" 2>/dev/null && echo "✓ Removed: $TAG2" || echo "  (already removed or in use)"
+fi
+
+# Remove the original source image if it's different from TAG1/TAG2
+if [ -n "$IMAGE_URI" ] && [ "$IMAGE_URI" != "$TAG1" ] && [ "$IMAGE_URI" != "$TAG2" ]; then
+  docker rmi -f "$IMAGE_URI" 2>/dev/null && echo "✓ Removed: $IMAGE_URI" || echo "  (already removed or in use)"
+fi
+
+# Clean up any OpenHands runtime images created during this run
+echo "Cleaning up OpenHands runtime images..."
+RUNTIME_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "(ghcr.io/openhands/runtime|openhands-runtime)" || true)
+if [ -n "$RUNTIME_IMAGES" ]; then
+  echo "$RUNTIME_IMAGES" | xargs -r docker rmi -f 2>/dev/null || true
+  echo "✓ Runtime images cleaned up"
+else
+  echo "✓ No runtime images to clean"
+fi
+
+# Clean up dangling images (untagged images)
+echo "Cleaning up dangling images..."
+docker image prune -f 2>/dev/null || true
+echo "✓ Dangling images cleaned up"
+
+# Show remaining disk usage
+echo ""
+echo "Docker disk usage after cleanup:"
+docker system df 2>/dev/null | head -5 || true
 
 echo ""
 echo "============================================"
