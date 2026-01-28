@@ -48,7 +48,9 @@ model = "gemini/gemini-3-pro-preview"
 api_key = "AIzaSyAtVtv7j2D2GFxTaX0AiOs68s1kw4sYG1w"  # ← ADD YOUR KEY
 max_input_tokens = 200000
 max_output_tokens = 8192
-completion_kwargs = { thinkingLevel = "high" }
+
+[llm.gemini.completion_kwargs]
+thinkingLevel = "high"
 
 #################################### Sandbox ###################################
 [sandbox]
