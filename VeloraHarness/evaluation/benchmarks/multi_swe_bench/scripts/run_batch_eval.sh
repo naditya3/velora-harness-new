@@ -59,6 +59,21 @@ DRY_RUN=false
 RETRY_FAILED=false
 RESUME_FROM=""
 
+# Timeout settings (in seconds)
+INSTANCE_TIMEOUT=7200        # 2 hours per instance max
+HEALTH_CHECK_INTERVAL=60     # Check remote health every 60 seconds
+STALL_THRESHOLD=1800         # Consider stalled if no progress in 30 minutes
+
+# Issue tracking - global arrays to track execution status
+declare -a COMPLETED_INSTANCES=()
+declare -a FAILED_INSTANCES=()
+declare -a INTERRUPTED_INSTANCES=()
+declare -a INSTANCE_ISSUES=()
+declare -a CURRENT_INSTANCES=()  # Currently running instances
+EXECUTION_START_TIME=""
+EXECUTION_END_TIME=""
+EXIT_REASON="unknown"
+
 # ============================================
 # COLOR OUTPUT
 # ============================================
@@ -74,6 +89,197 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_header() { echo -e "\n${CYAN}============================================${NC}"; echo -e "${CYAN}$1${NC}"; echo -e "${CYAN}============================================${NC}"; }
+
+# ============================================
+# ISSUE TRACKING FUNCTIONS
+# ============================================
+
+# Add an issue for a specific instance
+track_issue() {
+  local instance_id="$1"
+  local issue_type="$2"
+  local issue_msg="$3"
+  local timestamp=$(date +%Y-%m-%dT%H:%M:%S)
+  INSTANCE_ISSUES+=("${instance_id}|${issue_type}|${issue_msg}|${timestamp}")
+}
+
+# Mark instance as completed
+mark_completed() {
+  local instance_id="$1"
+  COMPLETED_INSTANCES+=("$instance_id")
+  # Remove from current instances
+  CURRENT_INSTANCES=("${CURRENT_INSTANCES[@]/$instance_id}")
+}
+
+# Mark instance as failed
+mark_failed() {
+  local instance_id="$1"
+  local reason="$2"
+  FAILED_INSTANCES+=("$instance_id")
+  track_issue "$instance_id" "FAILED" "$reason"
+  # Remove from current instances
+  CURRENT_INSTANCES=("${CURRENT_INSTANCES[@]/$instance_id}")
+}
+
+# Mark instance as interrupted
+mark_interrupted() {
+  local instance_id="$1"
+  local reason="$2"
+  INTERRUPTED_INSTANCES+=("$instance_id")
+  track_issue "$instance_id" "INTERRUPTED" "$reason"
+}
+
+# ============================================
+# SUMMARY GENERATION FUNCTION
+# ============================================
+generate_summary() {
+  local exit_reason="${1:-$EXIT_REASON}"
+  EXECUTION_END_TIME=$(date +%Y-%m-%dT%H:%M:%S)
+
+  # Create log directory if it doesn't exist
+  mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+  local summary_file="$LOG_DIR/execution_summary.md"
+
+  cat > "$summary_file" << SUMMARY_EOF
+# Batch Evaluation Execution Summary
+
+## Overview
+- **Timestamp**: $TIMESTAMP
+- **Model**: $MODEL_CONFIG
+- **Exit Reason**: $exit_reason
+- **Start Time**: ${EXECUTION_START_TIME:-N/A}
+- **End Time**: $EXECUTION_END_TIME
+
+## Instance Statistics
+| Status | Count | Instances |
+|--------|-------|-----------|
+| Completed | ${#COMPLETED_INSTANCES[@]} | ${COMPLETED_INSTANCES[*]:-None} |
+| Failed | ${#FAILED_INSTANCES[@]} | ${FAILED_INSTANCES[*]:-None} |
+| Interrupted | ${#INTERRUPTED_INSTANCES[@]} | ${INTERRUPTED_INSTANCES[*]:-None} |
+| In Progress (at exit) | ${#CURRENT_INSTANCES[@]} | ${CURRENT_INSTANCES[*]:-None} |
+
+## Issues Encountered
+
+SUMMARY_EOF
+
+  if [ ${#INSTANCE_ISSUES[@]} -eq 0 ]; then
+    echo "No issues recorded." >> "$summary_file"
+  else
+    echo "| Instance | Type | Issue | Timestamp |" >> "$summary_file"
+    echo "|----------|------|-------|-----------|" >> "$summary_file"
+    for issue in "${INSTANCE_ISSUES[@]}"; do
+      IFS='|' read -r inst_id issue_type issue_msg issue_time <<< "$issue"
+      echo "| $inst_id | $issue_type | $issue_msg | $issue_time |" >> "$summary_file"
+    done
+  fi
+
+  cat >> "$summary_file" << SUMMARY_EOF2
+
+## Execution Details
+- **Dataset Directory**: $DATASET_DIR
+- **Max Iterations**: $MAX_ITER
+- **AWS Hosts**: ${AWS_HOSTS:-Local execution}
+- **Log Directory**: $LOG_DIR
+
+## Next Steps
+
+SUMMARY_EOF2
+
+  # Add recommendations based on exit reason
+  case "$exit_reason" in
+    "user_interrupt")
+      echo "- Execution was interrupted by user (Ctrl+C)" >> "$summary_file"
+      echo "- To resume: \`./run_batch_eval.sh ... --resume-from <next_instance_id>\`" >> "$summary_file"
+      ;;
+    "worker_stalled")
+      echo "- A worker process stalled and was terminated" >> "$summary_file"
+      echo "- Check remote host connectivity and Docker status" >> "$summary_file"
+      echo "- Run \`./setup_remote_hosts.sh\` to verify host health" >> "$summary_file"
+      ;;
+    "worker_failed")
+      echo "- One or more workers failed during execution" >> "$summary_file"
+      echo "- Check worker logs in $LOG_DIR/ for details" >> "$summary_file"
+      ;;
+    "completed")
+      echo "- All instances processed successfully" >> "$summary_file"
+      ;;
+    *)
+      echo "- Unknown exit reason" >> "$summary_file"
+      echo "- Check logs for more details" >> "$summary_file"
+      ;;
+  esac
+
+  echo "" >> "$summary_file"
+  echo "Generated at: $(date)" >> "$summary_file"
+
+  log_info "Execution summary saved to: $summary_file"
+
+  # Also print a quick summary to console
+  echo ""
+  log_header "EXECUTION SUMMARY"
+  echo "Exit Reason: $exit_reason"
+  echo "Completed: ${#COMPLETED_INSTANCES[@]}"
+  echo "Failed: ${#FAILED_INSTANCES[@]}"
+  echo "Interrupted: ${#INTERRUPTED_INSTANCES[@]}"
+  echo "In Progress (at exit): ${#CURRENT_INSTANCES[@]}"
+  if [ ${#INSTANCE_ISSUES[@]} -gt 0 ]; then
+    echo ""
+    echo "Issues:"
+    for issue in "${INSTANCE_ISSUES[@]}"; do
+      IFS='|' read -r inst_id issue_type issue_msg issue_time <<< "$issue"
+      echo "  - [$issue_type] $inst_id: $issue_msg"
+    done
+  fi
+  echo ""
+  echo "Full summary: $summary_file"
+}
+
+# ============================================
+# SIGNAL HANDLERS
+# ============================================
+cleanup_and_exit() {
+  local signal="$1"
+  log_warning "Received $signal signal, cleaning up..."
+  EXIT_REASON="user_interrupt"
+
+  # Mark any current instances as interrupted
+  for instance in "${CURRENT_INSTANCES[@]}"; do
+    if [ -n "$instance" ]; then
+      mark_interrupted "$instance" "Interrupted by $signal"
+    fi
+  done
+
+  # Kill any background worker processes
+  if [ -n "${WORKER_PIDS[*]}" ]; then
+    for pid in "${WORKER_PIDS[@]}"; do
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+      fi
+    done
+  fi
+
+  # Generate summary before exit
+  generate_summary "user_interrupt"
+
+  # Try to collect partial results
+  if [ -n "$AWS_HOSTS" ] && [ -n "$SSH_OPTS" ]; then
+    log_info "Attempting to collect partial results..."
+    for i in "${!HOSTS[@]}"; do
+      host="${HOSTS[$i]}"
+      remote_log="${REMOTE_VELORA_PATH}/worker_${TIMESTAMP}_host${i}.log"
+      local_log="$LOG_DIR/worker_host${i}_partial.log"
+      scp $SCP_OPTS "${SSH_USER}@${host}:${remote_log}" "$local_log" 2>/dev/null || true
+    done
+  fi
+
+  log_info "Cleanup complete. Exiting..."
+  exit 130
+}
+
+# Set up signal handlers
+trap 'cleanup_and_exit SIGINT' SIGINT
+trap 'cleanup_and_exit SIGTERM' SIGTERM
 
 # ============================================
 # USAGE
@@ -313,16 +519,90 @@ EOF
 # ============================================
 # LOCAL EXECUTION MODE
 # ============================================
+
+# Resource check thresholds (same as worker script)
+LOCAL_MIN_DISK_GB=10
+LOCAL_MIN_MEM_GB=4
+LOCAL_MAX_RETRIES=2
+
+# Function to check available disk space locally
+local_check_disk_space() {
+  local available_kb=$(df -k . | tail -1 | awk '{print $4}')
+  local available_gb=$((available_kb / 1024 / 1024))
+  echo $available_gb
+}
+
+# Function to check available memory locally
+local_check_memory() {
+  local available_kb=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+  local available_gb=$((available_kb / 1024 / 1024))
+  echo $available_gb
+}
+
+# Function to perform aggressive Docker cleanup locally
+local_aggressive_docker_cleanup() {
+  log_info "Performing aggressive Docker cleanup..."
+
+  # Stop all openhands-related containers
+  docker ps -q --filter "name=openhands" 2>/dev/null | xargs -r docker stop 2>/dev/null || true
+  docker ps -q --filter "name=sweb" 2>/dev/null | xargs -r docker stop 2>/dev/null || true
+
+  # Remove all stopped containers
+  docker container prune -f 2>/dev/null || true
+
+  # Remove OpenHands runtime images
+  docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "(ghcr.io/openhands/runtime|openhands-runtime)" | xargs -r docker rmi -f 2>/dev/null || true
+
+  # Remove dangling images and volumes
+  docker image prune -f 2>/dev/null || true
+  docker volume prune -f 2>/dev/null || true
+
+  # Full system prune
+  docker system prune -f --volumes 2>/dev/null || true
+
+  log_success "Aggressive cleanup complete"
+}
+
+# Function to check and ensure resources are available locally
+local_ensure_resources() {
+  local disk_gb=$(local_check_disk_space)
+  local mem_gb=$(local_check_memory)
+
+  log_info "Resource check: Disk=${disk_gb}GB, Memory=${mem_gb}GB"
+
+  if [ "$disk_gb" -lt "$LOCAL_MIN_DISK_GB" ] || [ "$mem_gb" -lt "$LOCAL_MIN_MEM_GB" ]; then
+    log_warning "Low resources detected. Running cleanup..."
+    local_aggressive_docker_cleanup
+
+    # Re-check
+    disk_gb=$(local_check_disk_space)
+    mem_gb=$(local_check_memory)
+    log_info "After cleanup: Disk=${disk_gb}GB, Memory=${mem_gb}GB"
+
+    if [ "$disk_gb" -lt "$LOCAL_MIN_DISK_GB" ]; then
+      log_error "Still not enough disk space (${disk_gb}GB < ${LOCAL_MIN_DISK_GB}GB)"
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
 run_local() {
   log_header "LOCAL SEQUENTIAL EXECUTION"
   log_info "Running ${#ALL_INSTANCES[@]} instances sequentially"
+  log_info "Resource thresholds: MIN_DISK=${LOCAL_MIN_DISK_GB}GB, MIN_MEM=${LOCAL_MIN_MEM_GB}GB, MAX_RETRIES=${LOCAL_MAX_RETRIES}"
+
+  # Initial cleanup
+  local_aggressive_docker_cleanup
 
   # Progress tracking
   PROGRESS_FILE="$LOG_DIR/progress.json"
-  echo '{"completed": [], "failed": [], "in_progress": null}' > "$PROGRESS_FILE"
+  echo '{"completed": [], "failed": [], "skipped": [], "in_progress": null}' > "$PROGRESS_FILE"
 
   COMPLETED=0
   FAILED=0
+  SKIPPED=0
 
   for i in "${!ALL_INSTANCES[@]}"; do
     instance_file="${ALL_INSTANCES[$i]}"
@@ -347,46 +627,87 @@ PYEOF
       continue
     fi
 
-    # Pre-run cleanup to ensure sufficient memory
-    log_info "Pre-run Docker cleanup..."
-    docker system prune -f --volumes 2>/dev/null || true
+    # Pre-run resource check
+    if ! local_ensure_resources; then
+      log_error "Insufficient resources, skipping $instance_id"
+      SKIPPED=$((SKIPPED + 1))
+      python3 << PYEOF
+import json
+with open("$PROGRESS_FILE", "r") as f:
+    p = json.load(f)
+if "skipped" not in p:
+    p["skipped"] = []
+p["skipped"].append({"id": "$instance_id", "reason": "insufficient_resources"})
+p["in_progress"] = None
+with open("$PROGRESS_FILE", "w") as f:
+    json.dump(p, f, indent=2)
+PYEOF
+      continue
+    fi
 
-    # Run evaluation
-    log_info "Starting evaluation..."
-    START_TIME=$(date +%s)
+    # Run evaluation with retry logic
+    RETRY_COUNT=0
+    EVAL_SUCCESS=false
+    LAST_EXIT_CODE=0
 
-    set +e
-    (
-      cd "$VELORA_ROOT"
-      bash "$EVAL_SCRIPT" "$MODEL_CONFIG" "$instance_file" "$EVAL_LIMIT" "$MAX_ITER" "$NUM_WORKERS" "$AGENT"
-    ) 2>&1 | tee "$instance_log"
-    EXIT_CODE=${PIPESTATUS[0]}
-    set -e
+    while [ $RETRY_COUNT -lt $LOCAL_MAX_RETRIES ] && [ "$EVAL_SUCCESS" = "false" ]; do
+      if [ $RETRY_COUNT -gt 0 ]; then
+        log_warning "Retry $RETRY_COUNT for $instance_id"
+        local_aggressive_docker_cleanup
+        sleep 5
+      fi
 
-    END_TIME=$(date +%s)
-    DURATION=$((END_TIME - START_TIME))
+      log_info "Starting evaluation (attempt $((RETRY_COUNT + 1))/$LOCAL_MAX_RETRIES)..."
+      START_TIME=$(date +%s)
 
-    # Update progress
-    if [ $EXIT_CODE -eq 0 ]; then
+      set +e
+      (
+        cd "$VELORA_ROOT"
+        bash "$EVAL_SCRIPT" "$MODEL_CONFIG" "$instance_file" "$EVAL_LIMIT" "$MAX_ITER" "$NUM_WORKERS" "$AGENT"
+      ) 2>&1 | tee "$instance_log"
+      EXIT_CODE=${PIPESTATUS[0]}
+      LAST_EXIT_CODE=$EXIT_CODE
+      set -e
+
+      END_TIME=$(date +%s)
+      DURATION=$((END_TIME - START_TIME))
+
+      if [ $EXIT_CODE -eq 0 ]; then
+        EVAL_SUCCESS=true
+      elif [ $EXIT_CODE -eq 252 ] || [ $EXIT_CODE -eq 137 ]; then
+        # Exit code 252 = Docker resource issue, 137 = OOM killed
+        log_warning "Resource error (exit code $EXIT_CODE), will retry..."
+        RETRY_COUNT=$((RETRY_COUNT + 1))
+      else
+        # Other errors, don't retry
+        log_error "Evaluation failed with exit code $EXIT_CODE"
+        break
+      fi
+    done
+
+    # Update progress based on final result
+    if [ "$EVAL_SUCCESS" = "true" ]; then
       COMPLETED=$((COMPLETED + 1))
+      mark_completed "$instance_id"
       log_success "Instance $instance_id completed in ${DURATION}s"
       python3 << PYEOF
 import json
 with open("$PROGRESS_FILE", "r") as f:
     p = json.load(f)
-p["completed"].append({"id": "$instance_id", "duration": $DURATION})
+p["completed"].append({"id": "$instance_id", "duration": $DURATION, "retries": $RETRY_COUNT})
 p["in_progress"] = None
 with open("$PROGRESS_FILE", "w") as f:
     json.dump(p, f, indent=2)
 PYEOF
     else
       FAILED=$((FAILED + 1))
-      log_error "Instance $instance_id failed (exit code: $EXIT_CODE)"
+      mark_failed "$instance_id" "Exit code $LAST_EXIT_CODE after $RETRY_COUNT retries"
+      log_error "Instance $instance_id failed (exit code: $LAST_EXIT_CODE, retries: $RETRY_COUNT)"
       python3 << PYEOF
 import json
 with open("$PROGRESS_FILE", "r") as f:
     p = json.load(f)
-p["failed"].append({"id": "$instance_id", "exit_code": $EXIT_CODE, "duration": $DURATION})
+p["failed"].append({"id": "$instance_id", "exit_code": $LAST_EXIT_CODE, "duration": $DURATION, "retries": $RETRY_COUNT})
 p["in_progress"] = None
 with open("$PROGRESS_FILE", "w") as f:
     json.dump(p, f, indent=2)
@@ -395,11 +716,19 @@ PYEOF
 
     # Post-run cleanup
     log_info "Post-run Docker cleanup..."
-    docker system prune -f 2>/dev/null || true
+    docker container prune -f 2>/dev/null || true
+    docker image prune -f 2>/dev/null || true
+    docker volume prune -f 2>/dev/null || true
+
+    # If more instances to process, remove runtime images
+    REMAINING=$((${#ALL_INSTANCES[@]} - i - 1))
+    if [ $REMAINING -gt 0 ]; then
+      docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "ghcr.io/openhands/runtime" | xargs -r docker rmi -f 2>/dev/null || true
+    fi
 
     # Progress summary
     echo ""
-    log_info "Progress: $COMPLETED completed, $FAILED failed, $((${#ALL_INSTANCES[@]} - i - 1)) remaining"
+    log_info "Progress: $COMPLETED completed, $FAILED failed, $SKIPPED skipped, $REMAINING remaining"
   done
 
   return 0
@@ -410,6 +739,11 @@ PYEOF
 # ============================================
 run_distributed() {
   log_header "DISTRIBUTED PARALLEL EXECUTION"
+
+  # Capture git commit hash from local repository to pass to remote hosts
+  # This is needed because remote hosts don't have the .git folder
+  LOCAL_GIT_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+  log_info "Local git commit: $LOCAL_GIT_COMMIT"
 
   # Parse AWS hosts
   IFS=',' read -ra HOSTS <<< "$AWS_HOSTS"
@@ -559,15 +893,35 @@ DISTEOF
       continue
     fi
 
-    # Ensure poetry dependencies are installed
-    log_info "  Installing poetry dependencies on $host (this may take a moment)..."
-    POETRY_INSTALL=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "source ~/.bashrc 2>/dev/null; source ~/.profile 2>/dev/null; export PATH=\$HOME/.local/bin:\$PATH; cd ${REMOTE_VELORA_PATH} && poetry install --no-interaction 2>&1" 2>/dev/null || echo "INSTALL_FAILED")
-    if [[ "$POETRY_INSTALL" == *"INSTALL_FAILED"* ]]; then
-      log_error "Poetry install failed on $host"
-      HOSTS_OK=false
-      continue
+    # Ensure poetry dependencies are installed and synced
+    log_info "  Verifying poetry dependencies on $host..."
+
+    # First check if critical imports work
+    DEPS_CHECK=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "source ~/.bashrc 2>/dev/null; source ~/.profile 2>/dev/null; export PATH=\$HOME/.local/bin:\$PATH; cd ${REMOTE_VELORA_PATH} && poetry run python -c 'import pandas; import datasets' 2>&1" 2>/dev/null || echo "IMPORT_FAILED")
+
+    if [[ "$DEPS_CHECK" == *"IMPORT_FAILED"* ]] || [[ "$DEPS_CHECK" == *"ModuleNotFoundError"* ]] || [[ "$DEPS_CHECK" == *"No module named"* ]]; then
+      log_info "  Dependencies incomplete, running poetry install --sync on $host..."
+
+      # Clear and reinstall with --sync to ensure exact match with lock file
+      POETRY_INSTALL=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "source ~/.bashrc 2>/dev/null; source ~/.profile 2>/dev/null; export PATH=\$HOME/.local/bin:\$PATH; cd ${REMOTE_VELORA_PATH} && poetry env remove --all 2>/dev/null; poetry install --sync --no-interaction 2>&1" 2>/dev/null || echo "INSTALL_FAILED")
+
+      if [[ "$POETRY_INSTALL" == *"INSTALL_FAILED"* ]]; then
+        log_error "Poetry install failed on $host"
+        HOSTS_OK=false
+        continue
+      fi
+
+      # Verify after install
+      VERIFY=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "source ~/.bashrc 2>/dev/null; source ~/.profile 2>/dev/null; export PATH=\$HOME/.local/bin:\$PATH; cd ${REMOTE_VELORA_PATH} && poetry run python -c 'import pandas; import datasets; print(\"OK\")' 2>&1" 2>/dev/null || echo "VERIFY_FAILED")
+
+      if [[ "$VERIFY" != *"OK"* ]]; then
+        log_error "Poetry dependencies verification failed on $host after install"
+        log_error "  Output: $VERIFY"
+        HOSTS_OK=false
+        continue
+      fi
     fi
-    log_info "  Poetry dependencies installed on $host"
+    log_info "  Poetry dependencies verified on $host"
 
     # Check Docker is available
     if ! ssh $SSH_OPTS "${SSH_USER}@${host}" "docker info" &>/dev/null; then
@@ -632,6 +986,11 @@ VELORA_ROOT="$7"
 HOST_ID="$8"
 LOG_FILE="$9"
 
+# Resource check thresholds
+MIN_DISK_GB=10
+MIN_MEM_GB=4
+MAX_RETRIES=2
+
 # Source shell profile to get poetry and other tools in PATH
 # This is needed because SSH non-interactive sessions don't load .bashrc
 if [ -f "$HOME/.bashrc" ]; then
@@ -643,6 +1002,84 @@ fi
 
 # Add common poetry locations to PATH
 export PATH="$HOME/.local/bin:$HOME/.poetry/bin:$PATH"
+
+# Source OpenHands environment file if it exists (contains git commit hash, etc.)
+# This is created by setup_remote_hosts.sh
+if [ -f "$VELORA_ROOT/.openhands_env" ]; then
+  source "$VELORA_ROOT/.openhands_env"
+  echo "Sourced .openhands_env (OPENHANDS_GIT_COMMIT=${OPENHANDS_GIT_COMMIT:-not set})" | tee -a "$LOG_FILE"
+fi
+
+# Function to check available disk space (returns available GB)
+check_disk_space() {
+  local available_kb=$(df -k "$VELORA_ROOT" | tail -1 | awk '{print $4}')
+  local available_gb=$((available_kb / 1024 / 1024))
+  echo $available_gb
+}
+
+# Function to check available memory (returns available GB)
+check_memory() {
+  local available_kb=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+  local available_gb=$((available_kb / 1024 / 1024))
+  echo $available_gb
+}
+
+# Function to perform aggressive Docker cleanup
+aggressive_docker_cleanup() {
+  echo "Performing aggressive Docker cleanup..." | tee -a "$LOG_FILE"
+
+  # Stop all openhands-related containers
+  echo "  Stopping openhands containers..." | tee -a "$LOG_FILE"
+  docker ps -q --filter "name=openhands" 2>/dev/null | xargs -r docker stop 2>/dev/null || true
+  docker ps -q --filter "name=sweb" 2>/dev/null | xargs -r docker stop 2>/dev/null || true
+
+  # Remove all stopped containers
+  echo "  Removing stopped containers..." | tee -a "$LOG_FILE"
+  docker container prune -f 2>/dev/null || true
+
+  # Remove OpenHands runtime images (they are rebuilt each time anyway)
+  echo "  Removing OpenHands runtime images..." | tee -a "$LOG_FILE"
+  docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "(ghcr.io/openhands/runtime|openhands-runtime)" | xargs -r docker rmi -f 2>/dev/null || true
+
+  # Remove dangling images
+  echo "  Removing dangling images..." | tee -a "$LOG_FILE"
+  docker image prune -f 2>/dev/null || true
+
+  # Remove unused volumes
+  echo "  Removing unused volumes..." | tee -a "$LOG_FILE"
+  docker volume prune -f 2>/dev/null || true
+
+  # Full system prune
+  echo "  Running full system prune..." | tee -a "$LOG_FILE"
+  docker system prune -f --volumes 2>/dev/null || true
+
+  echo "Aggressive cleanup complete" | tee -a "$LOG_FILE"
+}
+
+# Function to check and ensure resources are available
+ensure_resources() {
+  local disk_gb=$(check_disk_space)
+  local mem_gb=$(check_memory)
+
+  echo "Resource check: Disk=${disk_gb}GB, Memory=${mem_gb}GB" | tee -a "$LOG_FILE"
+
+  if [ "$disk_gb" -lt "$MIN_DISK_GB" ] || [ "$mem_gb" -lt "$MIN_MEM_GB" ]; then
+    echo "WARNING: Low resources detected. Running cleanup..." | tee -a "$LOG_FILE"
+    aggressive_docker_cleanup
+
+    # Re-check
+    disk_gb=$(check_disk_space)
+    mem_gb=$(check_memory)
+    echo "After cleanup: Disk=${disk_gb}GB, Memory=${mem_gb}GB" | tee -a "$LOG_FILE"
+
+    if [ "$disk_gb" -lt "$MIN_DISK_GB" ]; then
+      echo "ERROR: Still not enough disk space (${disk_gb}GB < ${MIN_DISK_GB}GB)" | tee -a "$LOG_FILE"
+      return 1
+    fi
+  fi
+
+  return 0
+}
 
 # Verify poetry is available
 if ! command -v poetry &> /dev/null; then
@@ -666,10 +1103,33 @@ fi
 
 cd "$VELORA_ROOT"
 
-# Ensure poetry dependencies are installed
-echo "Installing poetry dependencies..." | tee -a "$LOG_FILE"
-if ! poetry install --no-interaction 2>&1 | tee -a "$LOG_FILE"; then
-  echo "WARNING: poetry install had issues, continuing anyway..." | tee -a "$LOG_FILE"
+# Initial resource check and cleanup
+echo "Performing initial resource check and cleanup..." | tee -a "$LOG_FILE"
+aggressive_docker_cleanup
+
+# Verify critical dependencies are available
+echo "Verifying critical dependencies..." | tee -a "$LOG_FILE"
+if ! poetry run python -c "import pandas; import datasets; print('Dependencies OK')" 2>&1 | tee -a "$LOG_FILE"; then
+  echo "Dependencies missing, running poetry install --sync..." | tee -a "$LOG_FILE"
+
+  # Clear cache and reinstall with --sync
+  poetry env remove --all 2>/dev/null || true
+  if ! poetry install --sync --no-interaction 2>&1 | tee -a "$LOG_FILE"; then
+    echo "ERROR: poetry install --sync failed" | tee -a "$LOG_FILE"
+    exit 1
+  fi
+
+  # Verify again after install
+  if ! poetry run python -c "import pandas; import datasets; print('Dependencies verified after install')" 2>&1 | tee -a "$LOG_FILE"; then
+    echo "datasets module still missing, installing explicitly via pip..." | tee -a "$LOG_FILE"
+    poetry run pip install datasets 2>&1 | tee -a "$LOG_FILE"
+
+    # Final verification
+    if ! poetry run python -c "import pandas; import datasets; print('Dependencies verified after pip install')" 2>&1 | tee -a "$LOG_FILE"; then
+      echo "ERROR: Critical dependencies still missing after pip install" | tee -a "$LOG_FILE"
+      exit 1
+    fi
+  fi
 fi
 
 # Find all .jsonl files in dataset directory
@@ -678,9 +1138,12 @@ INSTANCES=($(find "$DATASET_DIR" -name "*.jsonl" -type f | sort))
 echo "Worker $HOST_ID starting with ${#INSTANCES[@]} instances" | tee -a "$LOG_FILE"
 echo "Poetry version: $(poetry --version 2>/dev/null || echo 'unknown')" | tee -a "$LOG_FILE"
 echo "VELORA_ROOT: $VELORA_ROOT" | tee -a "$LOG_FILE"
+echo "OPENHANDS_GIT_COMMIT: ${OPENHANDS_GIT_COMMIT:-unknown}" | tee -a "$LOG_FILE"
+echo "Resource thresholds: MIN_DISK=${MIN_DISK_GB}GB, MIN_MEM=${MIN_MEM_GB}GB" | tee -a "$LOG_FILE"
 
 COMPLETED=0
 FAILED=0
+SKIPPED=0
 
 for instance_file in "${INSTANCES[@]}"; do
   instance_id=$(cat "$instance_file" | python3 -c "import sys,json; print(json.load(sys.stdin).get('instance_id','unknown'))" 2>/dev/null || basename "$instance_file" .jsonl)
@@ -690,32 +1153,73 @@ for instance_file in "${INSTANCES[@]}"; do
   echo "Worker $HOST_ID: Starting $instance_id" | tee -a "$LOG_FILE"
   echo "========================================" | tee -a "$LOG_FILE"
 
-  # Pre-run cleanup
-  docker system prune -f --volumes 2>/dev/null || true
-
-  # Run evaluation using absolute path
-  START_TIME=$(date +%s)
-
-  if bash "$EVAL_SCRIPT" \
-      "$MODEL_CONFIG" "$instance_file" "$EVAL_LIMIT" "$MAX_ITER" "$NUM_WORKERS" "$AGENT" 2>&1 | tee -a "$LOG_FILE"; then
-    COMPLETED=$((COMPLETED + 1))
-    echo "Worker $HOST_ID: $instance_id COMPLETED" | tee -a "$LOG_FILE"
-  else
-    FAILED=$((FAILED + 1))
-    echo "Worker $HOST_ID: $instance_id FAILED" | tee -a "$LOG_FILE"
+  # Pre-run resource check
+  if ! ensure_resources; then
+    echo "Worker $HOST_ID: $instance_id SKIPPED (insufficient resources)" | tee -a "$LOG_FILE"
+    SKIPPED=$((SKIPPED + 1))
+    continue
   fi
 
-  END_TIME=$(date +%s)
-  DURATION=$((END_TIME - START_TIME))
-  echo "Worker $HOST_ID: $instance_id took ${DURATION}s" | tee -a "$LOG_FILE"
+  # Run evaluation with retry logic
+  RETRY_COUNT=0
+  EVAL_SUCCESS=false
 
-  # Post-run cleanup
-  docker system prune -f 2>/dev/null || true
+  while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$EVAL_SUCCESS" = "false" ]; do
+    START_TIME=$(date +%s)
+
+    if [ $RETRY_COUNT -gt 0 ]; then
+      echo "Worker $HOST_ID: Retry $RETRY_COUNT for $instance_id" | tee -a "$LOG_FILE"
+      # More aggressive cleanup before retry
+      aggressive_docker_cleanup
+      sleep 5
+    fi
+
+    set +e
+    bash "$EVAL_SCRIPT" \
+        "$MODEL_CONFIG" "$instance_file" "$EVAL_LIMIT" "$MAX_ITER" "$NUM_WORKERS" "$AGENT" 2>&1 | tee -a "$LOG_FILE"
+    EXIT_CODE=$?
+    set -e
+
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+
+    if [ $EXIT_CODE -eq 0 ]; then
+      EVAL_SUCCESS=true
+      COMPLETED=$((COMPLETED + 1))
+      echo "Worker $HOST_ID: $instance_id COMPLETED in ${DURATION}s" | tee -a "$LOG_FILE"
+    elif [ $EXIT_CODE -eq 252 ] || [ $EXIT_CODE -eq 137 ]; then
+      # Exit code 252 = Docker resource issue, 137 = OOM killed
+      echo "Worker $HOST_ID: $instance_id failed with resource error (exit code $EXIT_CODE), will retry..." | tee -a "$LOG_FILE"
+      RETRY_COUNT=$((RETRY_COUNT + 1))
+    else
+      # Other errors, don't retry
+      echo "Worker $HOST_ID: $instance_id FAILED with exit code $EXIT_CODE in ${DURATION}s" | tee -a "$LOG_FILE"
+      break
+    fi
+  done
+
+  if [ "$EVAL_SUCCESS" = "false" ]; then
+    FAILED=$((FAILED + 1))
+    echo "Worker $HOST_ID: $instance_id FAILED (after $RETRY_COUNT retries)" | tee -a "$LOG_FILE"
+  fi
+
+  # Post-run cleanup (always)
+  echo "Post-run cleanup..." | tee -a "$LOG_FILE"
+  docker container prune -f 2>/dev/null || true
+  docker image prune -f 2>/dev/null || true
+  docker volume prune -f 2>/dev/null || true
+
+  # If more instances to process, do more aggressive cleanup
+  REMAINING=$((${#INSTANCES[@]} - COMPLETED - FAILED - SKIPPED))
+  if [ $REMAINING -gt 0 ]; then
+    # Remove runtime images to free up space
+    docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "ghcr.io/openhands/runtime" | xargs -r docker rmi -f 2>/dev/null || true
+  fi
 done
 
 echo "" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"
-echo "Worker $HOST_ID FINISHED: $COMPLETED completed, $FAILED failed" | tee -a "$LOG_FILE"
+echo "Worker $HOST_ID FINISHED: $COMPLETED completed, $FAILED failed, $SKIPPED skipped" | tee -a "$LOG_FILE"
 echo "========================================" | tee -a "$LOG_FILE"
 WORKER_EOF
 
@@ -740,7 +1244,9 @@ WORKER_EOF
     log_info "Launching worker on $host..."
 
     # Launch worker via SSH in background
-    ssh $SSH_OPTS "${SSH_USER}@${host}" "bash ${REMOTE_VELORA_PATH}/worker_script_${TIMESTAMP}.sh \
+    # Pass OPENHANDS_GIT_COMMIT env var so remote hosts can track the source commit
+    ssh $SSH_OPTS "${SSH_USER}@${host}" "export OPENHANDS_GIT_COMMIT='$LOCAL_GIT_COMMIT' && \
+      bash ${REMOTE_VELORA_PATH}/worker_script_${TIMESTAMP}.sh \
       '$MODEL_CONFIG' \
       '${REMOTE_VELORA_PATH}/dataset_batch_${TIMESTAMP}' \
       '$MAX_ITER' \
@@ -756,35 +1262,158 @@ WORKER_EOF
   done
 
   # ============================================
-  # MONITOR WORKERS
+  # MONITOR WORKERS (with health checks)
   # ============================================
   log_header "MONITORING WORKERS"
 
   # Wait for all workers and collect exit codes
   declare -a WORKER_EXIT_CODES
+  declare -a WORKER_LAST_ACTIVITY  # Track last log modification time
+  declare -a WORKER_STALL_COUNT    # Count consecutive stall detections
   RUNNING=${#WORKER_PIDS[@]}
+
+  # Initialize tracking arrays
+  for i in "${!HOSTS[@]}"; do
+    WORKER_LAST_ACTIVITY[$i]=$(date +%s)
+    WORKER_STALL_COUNT[$i]=0
+  done
+
+  MONITOR_START=$(date +%s)
+  HEALTH_CHECK_COUNTER=0
 
   while [ $RUNNING -gt 0 ]; do
     sleep 30
+    HEALTH_CHECK_COUNTER=$((HEALTH_CHECK_COUNTER + 1))
 
     RUNNING=0
     for i in "${!WORKER_PIDS[@]}"; do
       pid="${WORKER_PIDS[$i]}"
+      host="${HOSTS[$i]}"
+
       if [ -n "$pid" ]; then
         if kill -0 "$pid" 2>/dev/null; then
           RUNNING=$((RUNNING + 1))
+
+          # Perform health check every HEALTH_CHECK_INTERVAL (2 iterations = 60 seconds)
+          if [ $((HEALTH_CHECK_COUNTER % 2)) -eq 0 ]; then
+            # Check if remote worker process is still alive
+            REMOTE_ALIVE=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "ps aux | grep -E 'worker_script|run_infer|poetry.*run' | grep -v grep | wc -l" 2>/dev/null || echo "0")
+
+            if [ "$REMOTE_ALIVE" = "0" ]; then
+              # Remote process died but SSH still connected
+              log_warning "Worker $i: Remote process appears dead, checking log..."
+
+              # Get the last line of the remote log
+              LAST_LOG=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "tail -5 ${REMOTE_VELORA_PATH}/worker_${TIMESTAMP}_host${i}.log 2>/dev/null" || echo "")
+
+              # Check if it completed or failed
+              if echo "$LAST_LOG" | grep -q "COMPLETED\|FINISHED"; then
+                log_info "Worker $i completed but SSH still open, forcing close..."
+                kill "$pid" 2>/dev/null || true
+                WORKER_EXIT_CODES[$i]=0
+                WORKER_PIDS[$i]=""
+                RUNNING=$((RUNNING - 1))
+                continue
+              elif echo "$LAST_LOG" | grep -q "FAILED\|ERROR\|Exception"; then
+                log_error "Worker $i failed on remote host"
+                track_issue "host_${i}" "WORKER_DIED" "Remote worker process died unexpectedly"
+                kill "$pid" 2>/dev/null || true
+                WORKER_EXIT_CODES[$i]=1
+                WORKER_PIDS[$i]=""
+                RUNNING=$((RUNNING - 1))
+                continue
+              else
+                # Process died without clear status - check Docker
+                DOCKER_RUNNING=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "docker ps -q --filter 'name=openhands-runtime' | wc -l" 2>/dev/null || echo "0")
+
+                if [ "$DOCKER_RUNNING" = "0" ]; then
+                  log_error "Worker $i: Docker container exited, checking status..."
+                  DOCKER_EXIT=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "docker ps -a --filter 'name=openhands-runtime' --format '{{.Status}}' | head -1" 2>/dev/null || echo "unknown")
+                  track_issue "host_${i}" "DOCKER_EXITED" "Docker container exited: $DOCKER_EXIT"
+                  kill "$pid" 2>/dev/null || true
+                  WORKER_EXIT_CODES[$i]=1
+                  WORKER_PIDS[$i]=""
+                  RUNNING=$((RUNNING - 1))
+                  continue
+                fi
+              fi
+            fi
+
+            # Check for log activity (stall detection)
+            CURRENT_LOG_SIZE=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "stat -c%s ${REMOTE_VELORA_PATH}/worker_${TIMESTAMP}_host${i}.log 2>/dev/null || echo 0" 2>/dev/null || echo "0")
+            CURRENT_TIME=$(date +%s)
+
+            if [ "${LAST_LOG_SIZE[$i]:-0}" = "$CURRENT_LOG_SIZE" ]; then
+              WORKER_STALL_COUNT[$i]=$((${WORKER_STALL_COUNT[$i]} + 1))
+              STALL_DURATION=$((WORKER_STALL_COUNT[$i] * 60))  # Each check is ~60 seconds
+
+              if [ $STALL_DURATION -ge $STALL_THRESHOLD ]; then
+                log_warning "Worker $i: No log activity for ${STALL_DURATION}s (stall detected)"
+
+                # Check what instance is being processed
+                CURRENT_INSTANCE=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "grep -oP 'Starting \K[0-9]+' ${REMOTE_VELORA_PATH}/worker_${TIMESTAMP}_host${i}.log 2>/dev/null | tail -1" || echo "unknown")
+
+                if [ $STALL_DURATION -ge $((STALL_THRESHOLD * 3)) ]; then
+                  # Stalled for too long (15+ minutes), terminate
+                  log_error "Worker $i: Stalled for ${STALL_DURATION}s, terminating..."
+                  track_issue "$CURRENT_INSTANCE" "STALLED" "Worker stalled for ${STALL_DURATION}s with no activity"
+                  mark_interrupted "$CURRENT_INSTANCE" "Worker stalled"
+                  kill "$pid" 2>/dev/null || true
+                  EXIT_REASON="worker_stalled"
+                  WORKER_EXIT_CODES[$i]=124  # Timeout exit code
+                  WORKER_PIDS[$i]=""
+                  RUNNING=$((RUNNING - 1))
+                  continue
+                fi
+              fi
+            else
+              # Activity detected, reset stall counter
+              WORKER_STALL_COUNT[$i]=0
+            fi
+            LAST_LOG_SIZE[$i]="$CURRENT_LOG_SIZE"
+          fi
         else
+          # Process finished normally
           wait "$pid" 2>/dev/null
           WORKER_EXIT_CODES[$i]=$?
           WORKER_PIDS[$i]=""
-          log_info "Worker $i finished (exit code: ${WORKER_EXIT_CODES[$i]})"
+
+          if [ ${WORKER_EXIT_CODES[$i]} -eq 0 ]; then
+            log_success "Worker $i finished successfully"
+          else
+            log_error "Worker $i finished with exit code: ${WORKER_EXIT_CODES[$i]}"
+            track_issue "host_${i}" "WORKER_FAILED" "Worker exited with code ${WORKER_EXIT_CODES[$i]}"
+          fi
         fi
       fi
     done
 
     if [ $RUNNING -gt 0 ]; then
-      log_info "Status: $RUNNING worker(s) still running..."
+      ELAPSED=$(($(date +%s) - MONITOR_START))
+      log_info "Status: $RUNNING worker(s) still running... (elapsed: ${ELAPSED}s)"
     fi
+  done
+
+  # Parse worker logs to update instance tracking
+  log_info "Parsing worker logs for instance status..."
+  for i in "${!HOSTS[@]}"; do
+    host="${HOSTS[$i]}"
+    remote_log="${REMOTE_VELORA_PATH}/worker_${TIMESTAMP}_host${i}.log"
+
+    # Fetch log first
+    local_log="$LOG_DIR/worker_host${i}.log"
+    scp $SCP_OPTS "${SSH_USER}@${host}:${remote_log}" "$local_log" 2>/dev/null || continue
+
+    # Parse for completed/failed instances
+    while IFS= read -r line; do
+      if [[ "$line" =~ Worker\ [0-9]+:\ ([0-9]+)\ COMPLETED ]]; then
+        instance_id="${BASH_REMATCH[1]}"
+        mark_completed "$instance_id"
+      elif [[ "$line" =~ Worker\ [0-9]+:\ ([0-9]+)\ FAILED ]]; then
+        instance_id="${BASH_REMATCH[1]}"
+        mark_failed "$instance_id" "Evaluation failed"
+      fi
+    done < "$local_log"
   done
 
   # ============================================
@@ -926,12 +1555,21 @@ PYEOF
 # ============================================
 # MAIN EXECUTION
 # ============================================
+EXECUTION_START_TIME=$(date +%Y-%m-%dT%H:%M:%S)
+
 log_header "VELORA BATCH EVALUATION"
 echo "Timestamp: $TIMESTAMP"
 echo "Model: $MODEL_CONFIG"
 echo "Dataset: $DATASET_DIR_ABS"
 echo "Instances: ${#ALL_INSTANCES[@]}"
 echo "Max Iterations: $MAX_ITER"
+echo "Start Time: $EXECUTION_START_TIME"
+
+# Track all instances as "pending"
+for inst_file in "${ALL_INSTANCES[@]}"; do
+  inst_id=$(cat "$inst_file" | python3 -c "import sys,json; print(json.load(sys.stdin).get('instance_id','unknown'))" 2>/dev/null || basename "$inst_file" .jsonl)
+  CURRENT_INSTANCES+=("$inst_id")
+done
 
 # Calculate number of hosts for display (before HOSTS array is created in run_distributed)
 if [ -n "$AWS_HOSTS" ]; then
@@ -942,16 +1580,32 @@ else
   echo "Mode: Local"
 fi
 
+EXEC_RESULT=0
 if [ -n "$AWS_HOSTS" ]; then
-  run_distributed
+  run_distributed || EXEC_RESULT=$?
 else
-  run_local
+  run_local || EXEC_RESULT=$?
+fi
+
+# Determine exit reason based on execution result
+if [ $EXEC_RESULT -eq 0 ]; then
+  if [ ${#FAILED_INSTANCES[@]} -gt 0 ]; then
+    EXIT_REASON="completed_with_failures"
+  else
+    EXIT_REASON="completed"
+  fi
+else
+  if [ "$EXIT_REASON" = "unknown" ]; then
+    EXIT_REASON="worker_failed"
+  fi
 fi
 
 aggregate_results
+generate_summary "$EXIT_REASON"
 
 log_header "BATCH EVALUATION COMPLETE"
 echo "Logs: $LOG_DIR"
 echo "Summary: $LOG_DIR/summary.json"
+echo "Execution Summary: $LOG_DIR/execution_summary.md"
 
-exit 0
+exit $EXEC_RESULT

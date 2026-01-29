@@ -1,0 +1,25 @@
+{
+  "completed": [],
+  "failed": [
+    {
+      "id": "518290527943513",
+      "exit_code": 1,
+      "duration": 3,
+      "retries": 0
+    },
+    {
+      "id": "538997559166630",
+      "exit_code": 1,
+      "duration": 1,
+      "retries": 0
+    },
+    {
+      "id": "546207528428803",
+      "exit_code": 1,
+      "duration": 1,
+      "retries": 0
+    }
+  ],
+  "skipped": [],
+  "in_progress": "565022679876152"
+}

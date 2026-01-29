@@ -1,0 +1,11 @@
+{
+  "timestamp": "20260128_120305",
+  "model_config": "llm.gemini3",
+  "dataset_dir": "/home/ubuntu/Velora_SWE_Harness-4/VeloraHarness/dataset",
+  "max_iter": 30,
+  "eval_limit": 1,
+  "num_workers": 1,
+  "agent": "CodeActAgent",
+  "aws_hosts": "",
+  "total_instances": 7
+}

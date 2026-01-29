@@ -44,6 +44,113 @@ export USE_HINT_TEXT=false
 export PYTHONPATH="$(pwd):$PYTHONPATH"
 
 # ============================================
+# PRE-RUN RESOURCE CHECK AND CLEANUP
+# ============================================
+echo "============================================"
+echo "PRE-RUN RESOURCE CHECK AND CLEANUP"
+echo "============================================"
+
+# Function to check available disk space (returns available GB)
+check_disk_space() {
+  local available_kb=$(df -k . | tail -1 | awk '{print $4}')
+  local available_gb=$((available_kb / 1024 / 1024))
+  echo $available_gb
+}
+
+# Function to check available memory (returns available GB)
+check_memory() {
+  local available_kb=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+  local available_gb=$((available_kb / 1024 / 1024))
+  echo $available_gb
+}
+
+# Check disk space before proceeding
+DISK_GB=$(check_disk_space)
+echo "Available disk space: ${DISK_GB}GB"
+
+# Minimum required space: 10GB
+MIN_DISK_GB=10
+
+if [ "$DISK_GB" -lt "$MIN_DISK_GB" ]; then
+  echo "WARNING: Low disk space (${DISK_GB}GB < ${MIN_DISK_GB}GB). Running aggressive cleanup..."
+
+  # Stop all running containers (except critical ones)
+  echo "Stopping all openhands-related containers..."
+  docker ps -q --filter "name=openhands" | xargs -r docker stop 2>/dev/null || true
+  docker ps -q --filter "name=sweb" | xargs -r docker stop 2>/dev/null || true
+
+  # Remove all stopped containers
+  echo "Removing stopped containers..."
+  docker container prune -f 2>/dev/null || true
+
+  # Remove all OpenHands runtime images aggressively
+  echo "Removing OpenHands runtime images..."
+  docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "(ghcr.io/openhands/runtime|openhands-runtime)" | xargs -r docker rmi -f 2>/dev/null || true
+
+  # Remove dangling images
+  echo "Removing dangling images..."
+  docker image prune -f 2>/dev/null || true
+
+  # Remove unused volumes
+  echo "Removing unused volumes..."
+  docker volume prune -f 2>/dev/null || true
+
+  # Run full system prune
+  echo "Running full Docker system prune..."
+  docker system prune -f --volumes 2>/dev/null || true
+
+  # Re-check disk space
+  DISK_GB=$(check_disk_space)
+  echo "Available disk space after cleanup: ${DISK_GB}GB"
+
+  if [ "$DISK_GB" -lt "$MIN_DISK_GB" ]; then
+    echo "ERROR: Still not enough disk space after cleanup (${DISK_GB}GB < ${MIN_DISK_GB}GB)"
+    echo "Please free up disk space manually before running evaluation."
+    exit 1
+  fi
+fi
+
+# Check memory before proceeding
+MEM_GB=$(check_memory)
+echo "Available memory: ${MEM_GB}GB"
+
+# Minimum required memory: 4GB
+MIN_MEM_GB=4
+
+if [ "$MEM_GB" -lt "$MIN_MEM_GB" ]; then
+  echo "WARNING: Low memory (${MEM_GB}GB < ${MIN_MEM_GB}GB). Killing stale processes..."
+
+  # Kill any stale Python/OpenHands processes that might be hogging memory
+  pkill -f "run_infer" 2>/dev/null || true
+  pkill -f "openhands" 2>/dev/null || true
+
+  # Stop any running openhands containers
+  docker ps -q --filter "name=openhands" | xargs -r docker stop 2>/dev/null || true
+
+  # Re-check memory
+  sleep 2
+  MEM_GB=$(check_memory)
+  echo "Available memory after cleanup: ${MEM_GB}GB"
+fi
+
+# Always do a basic cleanup before each run to prevent accumulation
+echo "Running pre-run Docker cleanup..."
+docker container prune -f 2>/dev/null || true
+docker image prune -f 2>/dev/null || true
+
+# Clean up any leftover runtime images from previous runs
+echo "Cleaning up old OpenHands runtime images..."
+OLD_RUNTIME_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "ghcr.io/openhands/runtime" | head -10 || true)
+if [ -n "$OLD_RUNTIME_IMAGES" ]; then
+  echo "Found old runtime images, removing..."
+  echo "$OLD_RUNTIME_IMAGES" | xargs -r docker rmi -f 2>/dev/null || true
+  echo "✓ Old runtime images cleaned up"
+fi
+
+echo "✓ Pre-run checks complete"
+echo ""
+
+# ============================================
 # ARGUMENT PARSING
 # ============================================
 MODEL_CONFIG=$1
