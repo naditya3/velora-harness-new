@@ -57,7 +57,7 @@ hi/
 jsonls/
 .eval_sessions/
 data/datasets/
-
+personal/
 # Logs
 *.log
 logs/
@@ -74,6 +74,7 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
+config.toml
 
 # Poetry
 
