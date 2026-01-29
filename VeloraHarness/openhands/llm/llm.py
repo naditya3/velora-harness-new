@@ -286,13 +286,16 @@ class LLM(RetryMixin, DebugMixin):
                     f'Using native GenAI SDK for {self.config.model} with thinking support'
                 )
                 try:
+                    # Prepare kwargs for native SDK (remove messages/tools to avoid duplicates)
+                    native_kwargs = {k: v for k, v in kwargs.items() if k not in ['messages', 'tools']}
+
                     resp = native_gemini_completion(
                         model=self.config.model,
                         messages=messages,
                         tools=kwargs.get('tools'),
                         api_key=self.config.api_key.get_secret_value() if self.config.api_key else None,
                         completion_kwargs=self.config.completion_kwargs,
-                        **kwargs
+                        **native_kwargs
                     )
                     # Convert to ModelResponse if needed
                     if not isinstance(resp, ModelResponse):
