@@ -10,36 +10,22 @@
 [core]
 workspace_base = "./workspace"
 cache_dir = "/tmp/cache"
-max_iterations = 500
+max_iterations = 1000
 runtime = "docker"
 
 #################################### LLM Configurations ##################################
 
 [llm.gpt]
-model = "gpt-5.1-2025-11-13"
+model = "gpt-5.2-codex"
 api_key = "REDACTED_OPENAI_API_KEY"  # ← ADD YOUR KEY
-temperature = 0.2
-max_input_tokens = 120000
-max_output_tokens = 65536
+reasoning_effort = "high"
+native_tool_calling = false
 
 [llm.claude]
-model = "claude-sonnet-4-5-20250929"
-api_key = "YOUR_ANTHROPIC_API_KEY_HERE"  # ← ADD YOUR KEY
-temperature = 0.2
-max_input_tokens = 120000
-max_output_tokens = 65536
+model = "claude-opus-4-5-20251101"
+api_key = "REDACTED_ANTHROPIC_API_KEY_1"  # ← ADD YOUR KEY
+reasoning_effort = "high"
 
-[llm.kimi]
-model = "kimi-k2-thinking-turbo"
-api_key = "YOUR_MOONSHOT_API_KEY_HERE"  # ← ADD YOUR KEY
-base_url = "https://api.moonshot.cn/v1"
-temperature = 0.2
-
-[llm.qwen]
-model = "qwen"
-api_key = "YOUR_QWEN_API_KEY_HERE"  # ← ADD YOUR KEY
-base_url = "YOUR_QWEN_ENDPOINT_HERE"
-temperature = 0.2
 
 [llm.gemini3]
 model = "gemini/gemini-3-pro-preview"
