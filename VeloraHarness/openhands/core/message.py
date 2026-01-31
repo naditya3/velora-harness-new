@@ -64,8 +64,12 @@ class Message(BaseModel):
     # - tool execution result (to LLM)
     tool_call_id: str | None = None
     name: str | None = None  # name of the tool
+    # Responses API reasoning accumulation (OpenAI SDK)
+    output_items: list[dict] | None = None  # For GPT-5.2 reasoning accumulation
     # force string serializer
     force_string_serializer: bool = False
+    # Responses API reasoning items (for accumulation across turns)
+    output_items: list[dict] | None = None
 
     @property
     def contains_image(self) -> bool:
@@ -154,5 +158,9 @@ class Message(BaseModel):
             )
             message_dict['tool_call_id'] = self.tool_call_id
             message_dict['name'] = self.name
+        
+        # CRITICAL: Add output_items for Responses API reasoning accumulation
+        if self.output_items is not None:
+            message_dict['output_items'] = self.output_items
 
         return message_dict

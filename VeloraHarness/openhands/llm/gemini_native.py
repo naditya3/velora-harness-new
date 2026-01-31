@@ -24,19 +24,35 @@ from google.genai.types import (
 from openhands.core.logger import openhands_logger as logger
 
 
-def should_use_native_gemini(model: str, completion_kwargs: dict | None) -> bool:
+def should_use_native_gemini(
+    model: str, 
+    completion_kwargs: dict | None, 
+    runtime_kwargs: dict | None = None
+) -> bool:
     """
     Determine if we should use native Gemini SDK instead of liteLLM.
 
     Returns True for Gemini 3 models with thinking enabled.
+    
+    Args:
+        model: Model name
+        completion_kwargs: Completion kwargs from config (may contain thinkingLevel)
+        runtime_kwargs: Runtime kwargs (may contain reasoning_effort)
     """
     if 'gemini-3' not in model.lower() and 'gemini/gemini-3' not in model.lower():
         return False
 
+    # Check for thinkingLevel in completion_kwargs (legacy)
     if completion_kwargs and 'thinkingLevel' in completion_kwargs:
         thinking_level = completion_kwargs['thinkingLevel']
         # Use native SDK for medium or high thinking
         return thinking_level in ['medium', 'high']
+    
+    # Check for reasoning_effort in runtime_kwargs (current)
+    if runtime_kwargs and 'reasoning_effort' in runtime_kwargs:
+        reasoning_effort = runtime_kwargs['reasoning_effort']
+        # Use native SDK for medium or high reasoning
+        return reasoning_effort in ['medium', 'high']
 
     return False
 
@@ -172,8 +188,13 @@ def native_gemini_completion(
         config_dict['tools'] = genai_tools
 
     # Configure thinking
+    thinking_level = None
     if completion_kwargs and 'thinkingLevel' in completion_kwargs:
         thinking_level = completion_kwargs['thinkingLevel']
+    elif kwargs.get('reasoning_effort'):
+        thinking_level = kwargs['reasoning_effort']
+    
+    if thinking_level:
         config_dict['thinking_config'] = ThinkingConfig(
             include_thoughts=True,
             mode=thinking_level.upper() if thinking_level in ['low', 'high'] else 'HIGH'
