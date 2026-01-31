@@ -1,9 +1,16 @@
 #!/bin/bash
-# run_full_eval_with_s3.sh - Complete Velora evaluation pipeline with S3 Docker download
+# run_full_eval_local_docker.sh - Complete Velora evaluation pipeline with local Docker images
+#
+# This script is designed for evaluating tasks when Docker images are already available locally.
+# Unlike run_full_eval_with_s3.sh, this script:
+#   - Does NOT download images from S3
+#   - Assumes Docker images are already loaded/built locally
+#   - Uses the same evaluation pipeline (trajectory + detailed eval)
+#   - Creates the same output structure
 #
 # This script:
-#   1. Downloads Docker image from S3 based on dataset
-#   2. Loads and tags the image for OpenHands
+#   1. Verifies local Docker image exists
+#   2. Tags the image for OpenHands compatibility
 #   3. Runs trajectory generation (run_infer.py)
 #   4. Runs patch evaluation (eval_pilot2_standardized.py)
 #   5. Creates OpenHands-format reports
@@ -14,15 +21,14 @@
 #   ├── metadata.json             ← Run metadata
 #   ├── llm_completions/          ← LLM responses
 #   └── eval_outputs/             ← Evaluation results
-#       ├── report.json           ← Aggregate report
 #       └── <instance_id>/
 #           ├── report.json       ← Detailed test breakdown
 #           ├── patch.diff        ← Applied patch
 #           ├── test_output.txt   ← Full test output
 #           └── run_instance.log  ← Execution log
 #
-# Usage: ./run_full_eval_with_s3.sh MODEL_CONFIG DATASET [EVAL_LIMIT] [MAX_ITER] [NUM_WORKERS]
-# Example: ./run_full_eval_with_s3.sh llm.gpt data/task.jsonl 1 30 1
+# Usage: ./run_full_eval_local_docker.sh MODEL_CONFIG DATASET [EVAL_LIMIT] [MAX_ITER] [NUM_WORKERS]
+# Example: ./run_full_eval_local_docker.sh llm.gpt data/task.jsonl 1 30 1
 
 set -eo pipefail
 
@@ -77,7 +83,7 @@ DATASET_ABS=$(realpath "$DATASET")
 # DISPLAY CONFIGURATION
 # ============================================
 echo "============================================"
-echo "VELORA FULL EVALUATION WITH S3 DOWNLOAD"
+echo "VELORA FULL EVALUATION WITH LOCAL DOCKER"
 echo "============================================"
 echo "MODEL_CONFIG: $MODEL_CONFIG"
 echo "DATASET: $DATASET_ABS"
@@ -138,51 +144,34 @@ echo "Image URI: $IMAGE_URI"
 echo "Repo: $REPO"
 echo "Base Commit: $BASE_COMMIT"
 
-# Construct S3 path
-REPO_PART=$(echo "$IMAGE_URI" | awk -F'/' '{print $NF}')
-REPO_NAME=$(echo "$REPO_PART" | cut -d':' -f1)
-COMMIT=$(echo "$REPO_PART" | cut -d':' -f2)
-S3_IMAGE_FILE="${REPO_NAME}-${COMMIT}.tar"
-S3_PATH="s3://kuberha-velora/velora-files/images/${S3_IMAGE_FILE}"
-
-echo "S3 Path: $S3_PATH"
-echo "Local file: ${S3_IMAGE_FILE}"
-
 # ============================================
-# DOWNLOAD AND LOAD DOCKER IMAGE FROM S3
+# VERIFY LOCAL DOCKER IMAGE EXISTS
 # ============================================
 echo ""
 echo "============================================"
-echo "DOWNLOADING DOCKER IMAGE FROM S3"
+echo "VERIFYING LOCAL DOCKER IMAGE"
 echo "============================================"
 
-# Check if image already exists
-if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "$IMAGE_URI"; then
-  echo "✓ Docker image already loaded: $IMAGE_URI"
+# Check if the exact image exists
+if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${IMAGE_URI}$"; then
+  echo "✓ Docker image found locally: $IMAGE_URI"
 else
-  echo "Downloading from S3..."
-  aws s3 cp "$S3_PATH" "$S3_IMAGE_FILE"
-
-  if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to download Docker image from S3"
+  echo "WARNING: Expected Docker image not found: $IMAGE_URI"
+  echo ""
+  echo "Searching for similar images..."
+  docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}" | grep -E "(mswebench|sweb|${REPO})" | head -10 || true
+  echo ""
+  echo "Available options:"
+  echo "  1. Build the image first using the SWE-bench build process"
+  echo "  2. Use run_full_eval_with_s3.sh to download from S3"
+  echo "  3. Manually specify an existing image by modifying the dataset file"
+  echo ""
+  read -p "Continue anyway and attempt to use the specified image? (y/N) " -n 1 -r
+  echo
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Exiting. Please ensure the Docker image is available locally."
     exit 1
   fi
-
-  echo "✓ Downloaded $(du -h "$S3_IMAGE_FILE" | cut -f1)"
-
-  echo "Loading Docker image..."
-  docker load < "$S3_IMAGE_FILE"
-
-  if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to load Docker image"
-    exit 1
-  fi
-
-  echo "✓ Image loaded"
-
-  # Cleanup tar file
-  rm -f "$S3_IMAGE_FILE"
-  echo "✓ Cleaned up tar file"
 fi
 
 # ============================================
@@ -202,15 +191,19 @@ echo "Original image: $IMAGE_URI"
 echo "Tag 1: $TAG1"
 echo "Tag 2: $TAG2"
 
-docker tag "$IMAGE_URI" "$TAG1"
-docker tag "$IMAGE_URI" "$TAG2"
-
-echo "✓ Image tagged successfully"
+# Only tag if the image exists
+if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "${IMAGE_URI}"; then
+  docker tag "$IMAGE_URI" "$TAG1" 2>/dev/null || echo "Warning: Could not create TAG1"
+  docker tag "$IMAGE_URI" "$TAG2" 2>/dev/null || echo "Warning: Could not create TAG2"
+  echo "✓ Image tagged successfully"
+else
+  echo "WARNING: Image not found for tagging. Evaluation may fail."
+fi
 
 # Verify tags
 echo ""
 echo "Verifying tags:"
-docker images | grep -E "(${INSTANCE_ID}|${REPO_M})" | head -5
+docker images | grep -E "(${INSTANCE_ID}|${REPO_M})" | head -5 || echo "No matching tags found"
 
 # ============================================
 # GET OPENHANDS VERSION
@@ -564,5 +557,5 @@ fi
 
 echo ""
 echo "============================================"
-echo "SUCCESS: Full evaluation with S3 download complete"
+echo "SUCCESS: Full evaluation with local Docker complete"
 echo "============================================"
