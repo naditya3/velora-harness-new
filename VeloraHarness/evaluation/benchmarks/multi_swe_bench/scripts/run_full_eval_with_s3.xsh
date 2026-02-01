@@ -105,6 +105,11 @@ print(f"Image URI: {image_uri}")
 print(f"Repo: {repo}")
 print(f"Base Commit: {base_commit}")
 
+# Extract language from dataset and override environment variable
+task_language = dataset_data.get('language', 'python').lower()
+$LANGUAGE = task_language
+print(f"Language (from dataset): {task_language}")
+
 # Construct S3 path
 repo_part = image_uri.split('/')[-1]
 repo_name = repo_part.split(':')[0]
