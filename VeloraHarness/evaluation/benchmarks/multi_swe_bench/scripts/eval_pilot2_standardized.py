@@ -298,10 +298,12 @@ def extract_model_patch(trajectory: Dict[str, Any]) -> str:
 def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int = 900) -> tuple:
     """
     Run the test command from the dataset, following client's test_spec.py flow.
-    
+
     Returns: (returncode, stdout, stderr)
     """
-    repo_directory = "/app/repo"
+    # Use /testbed for mswebench images (standard SWE-bench location)
+    # Fallback to /app/repo for older OpenHands images
+    repo_directory = "/testbed"
     test_patch_raw = instance.get("test_patch", "")
     test_command = instance.get("test_command", "pytest")
     
@@ -376,9 +378,11 @@ def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int
         parts = test_command.split("&&")
         test_exec = parts[-1].strip()  # Get the actual test command (pytest, etc.)
     
-    # Build a clean command: source ENV, unset proxies, then run tests
+    # Build a clean command: activate conda environment, unset proxies, then run tests
+    # Always source conda.sh and activate testbed for mswebench images
+    # The || true ensures we continue even if old /saved/ENV doesn't exist
     full_command = (
-        f"source /saved/ENV 2>/dev/null || source /saved/*/ENV 2>/dev/null || true; "
+        f"source /opt/miniconda3/etc/profile.d/conda.sh && conda activate testbed; "
         f"{unset_proxy}"
         f"cd {repo_directory} && {test_exec}"
     )
@@ -778,7 +782,7 @@ def evaluate_instance(
             # Try git apply first, then patch
             returncode, stdout, stderr = run_docker_command(
                 container_name,
-                "cd /app/repo && git apply -v /tmp/model.patch 2>&1 || "
+                "cd /testbed && git apply -v /tmp/model.patch 2>&1 || "
                 "patch --batch --fuzz=5 -p1 -i /tmp/model.patch 2>&1"
             )
             
@@ -794,13 +798,13 @@ def evaluate_instance(
         # First, remove any NEW test files created by the model (git clean)
         run_docker_command(
             container_name,
-            "cd /app/repo && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
+            "cd /testbed && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
         )
-        
+
         # Then, restore modified test files to original state (git checkout)
         run_docker_command(
             container_name,
-            "cd /app/repo && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
+            "cd /testbed && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
         )
         
         logger.info("Test files reset complete")
@@ -845,7 +849,7 @@ def evaluate_instance(
             fail_to_pass_failed=grade_results['fail_to_pass_failed'],
             pass_to_pass_success=grade_results['pass_to_pass_success'],
             pass_to_pass_failed=grade_results['pass_to_pass_failed'],
-            test_output=full_output[:50000]  # Limit output size
+            test_output=full_output
         )
         
     except Exception as e:
@@ -1059,11 +1063,15 @@ Examples:
     parser.add_argument("--trajectory-file", required=True, help="Path to trajectory output.jsonl")
     parser.add_argument("--dataset-file", required=True, help="Path to dataset JSONL")
     parser.add_argument("--docker-image", required=True, help="Docker image name or path to .tar")
-    parser.add_argument("--output-file", required=True, help="Output file for eval results")
+    parser.add_argument("--output-file", required=False, default=None, help="Output file for eval results (default: eval_output.jsonl beside trajectory file)")
     parser.add_argument("--timeout", type=int, default=900, help="Test timeout in seconds (default: 900)")
     
     args = parser.parse_args()
-    
+
+    # Default output file: eval_output.jsonl in the same directory as the trajectory file
+    if args.output_file is None:
+        args.output_file = os.path.join(os.path.dirname(args.trajectory_file), "eval_output.jsonl")
+
     # Run evaluation
     report = evaluate_instance(
         trajectory_file=args.trajectory_file,
@@ -1096,7 +1104,7 @@ Examples:
         original = json.loads(content)
     
     # Add eval details
-    original['pilot2_eval_details'] = asdict(report)
+    original['evaluation_details'] = asdict(report)
     original['resolved'] = report.resolved
     
     with open(args.output_file, 'w') as f:

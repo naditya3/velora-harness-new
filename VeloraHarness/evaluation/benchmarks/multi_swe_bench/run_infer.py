@@ -77,7 +77,11 @@ def _get_swebench_workspace_dir_name(instance: pd.Series) -> str:
     if version_raw is None or (isinstance(version_raw, float) and pd.isna(version_raw)):
         version = instance_id
     else:
-        version = version_raw
+        # Handle float versions - convert whole numbers like 0.0 to "0"
+        if isinstance(version_raw, float) and version_raw.is_integer():
+            version = str(int(version_raw))
+        else:
+            version = str(version_raw)
     return f'{repo}__{version}'.replace('/', '__')
 
 
