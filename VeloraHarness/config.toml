@@ -41,27 +41,30 @@ api_key = "YOUR_QWEN_API_KEY_HERE"  # ← ADD YOUR KEY
 base_url = "YOUR_QWEN_ENDPOINT_HERE"
 temperature = 0.2
 
-# Gemini 3 Pro with High Reasoning Mode
+# Gemini 3 Pro with High Reasoning Mode (thinkingLevel=high)
 # Docs: https://ai.google.dev/gemini-api/docs/thinking
+# NOTE: Uses liteLLM path with thinking_blocks preservation for thought_signatures
+# Rate limit handling: Gemini preview has strict RPM limits, use aggressive retries
 [llm.gemini]
 model = "gemini/gemini-3-pro-preview"
-api_key = "REDACTED_GOOGLE_API_KEY"
-max_input_tokens = 200000
-max_output_tokens = 8192
+api_key = "YOUR_GOOGLE_API_KEY_HERE"  # ← ADD YOUR KEY
+temperature = 1.0
+timeout = 600  # 10 minutes for thinking-enabled calls
+num_retries = 12  # More retries for rate limits
+retry_min_wait = 30  # Start with 30s wait (rate limit typically resets in 60s)
+retry_max_wait = 180  # Up to 3 minutes between retries
 
 [llm.gemini.completion_kwargs]
 thinkingLevel = "high"
 
-# GPT-5.2-codex with HIGH Reasoning Effort (Maximum available)
+# GPT-5.2-codex with Reasoning Effort
 # Docs: https://platform.openai.com/docs/guides/reasoning
-# Valid values: 'low', 'medium', 'high' ('xhigh' does NOT exist)
+# Valid values: 'low', 'medium', 'high', 'xhigh'
 [llm.gpt_codex]
 model = "gpt-5.2-codex"
-api_key = "REDACTED_OPENAI_API_KEY"
-reasoning_effort = "xhigh" # DISABLED FOR TESTING  # VALIDATED: xhigh is official GPT-5.2 feature (Dec 11, 2025)
-temperature = 0.2
-max_input_tokens = 120000
-max_output_tokens = 65536
+api_key = "YOUR_OPENAI_API_KEY_HERE"  # ← ADD YOUR KEY
+reasoning_effort = "high"
+temperature = 1
 native_tool_calling = false  # Use mock function calling with Responses API
 timeout = 7200  # 2 hours for reasoning calls
 num_retries = 8
