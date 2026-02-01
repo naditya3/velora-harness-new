@@ -18,6 +18,7 @@ INTEGRATION:
 from __future__ import annotations
 
 import json
+from litellm import PromptTokensDetails  # For cache tracking compatibility
 import uuid
 from typing import Any
 
@@ -32,6 +33,9 @@ from openhands.core.logger import openhands_logger as logger
 # ============================================================================
 # Key: conversation_id, Value: {'response_id': str, 'pending_tool_calls': list, 'processed_call_ids': set}
 _response_state: dict[str, dict] = {}
+
+# Tools that don't require a tool response (they terminate the conversation)
+TERMINAL_TOOLS = {'finish'}
 
 
 def generate_conversation_id() -> str:
@@ -62,12 +66,17 @@ def store_conversation_state(
     if processed_call_ids:
         all_processed = all_processed | processed_call_ids
     
+    # Get existing message count and update
+    existing_state = _response_state.get(conversation_id, {})
+    processed_msg_count = existing_state.get('processed_message_count', 0)
+    
     _response_state[conversation_id] = {
         'response_id': response_id,
         'pending_tool_calls': pending_tool_calls or [],
         'processed_call_ids': all_processed,
+        'processed_message_count': processed_msg_count,  # Preserve message count
     }
-    logger.info(f'[STATE] Stored response_id={response_id} for conversation={conversation_id}, processed={len(all_processed)} call_ids')
+    logger.info(f'[STATE] Stored response_id={response_id} for conversation={conversation_id}, processed={len(all_processed)} call_ids, msg_count={processed_msg_count}')
 
 
 def clear_conversation_state(conversation_id: str | None):
@@ -124,14 +133,18 @@ def openai_responses_completion(
         
         # Get already-processed call_ids so we don't resend them
         processed_call_ids = state.get('processed_call_ids', set())
+        pending_tool_calls = state.get('pending_tool_calls', [])
         
         # Extract ONLY NEW function_call_outputs from messages (role='tool')
         # Skip any that we've already sent in previous calls
         new_items = []
         new_call_ids = set()
+        found_tool_call_ids = set()  # Track which tool_call_ids we found in messages
+        
         for msg in messages:
             if msg.get('role') == 'tool':
                 tool_call_id = msg.get('tool_call_id', '')
+                found_tool_call_ids.add(tool_call_id)
                 
                 # Skip if we've already processed this call_id
                 if tool_call_id in processed_call_ids:
@@ -152,7 +165,73 @@ def openai_responses_completion(
                 new_call_ids.add(tool_call_id)
                 logger.info(f'[STATE] Added NEW function_call_output: call_id={tool_call_id}')
         
-        logger.info(f'[STATE] Skipped {len(processed_call_ids)} already-processed, sending {len(new_items)} new')
+        # =====================================================================
+        # CRITICAL FIX: Handle terminal tools (like 'finish') that don't have
+        # tool responses in OpenHands' message format. Create synthetic outputs.
+        # =====================================================================
+        for pending_call in pending_tool_calls:
+            call_id = pending_call.get('call_id') or pending_call.get('id', '')
+            call_name = pending_call.get('name', '')
+            
+            # Skip if already processed or found in messages
+            if call_id in processed_call_ids or call_id in found_tool_call_ids:
+                continue
+            
+            # Check if this is a terminal tool that needs a synthetic response
+            if call_name in TERMINAL_TOOLS:
+                logger.info(f'[STATE] Creating synthetic output for terminal tool: {call_name} (call_id={call_id})')
+                new_items.append({
+                    'type': 'function_call_output',
+                    'call_id': call_id,
+                    'output': json.dumps({'status': 'completed', 'tool': call_name}),
+                })
+                new_call_ids.add(call_id)
+            else:
+                # Non-terminal tool without a response - this is an error condition
+                logger.warning(f'[STATE] Missing tool response for non-terminal tool: {call_name} (call_id={call_id})')
+        
+        logger.info(f'[STATE] Skipped {len(processed_call_ids)} already-processed, sending {len(new_items)} new tool outputs')
+        
+        # =====================================================================
+        # CRITICAL FIX: Handle user messages on subsequent calls
+        # When the model outputs text without a tool call, OpenHands sends a
+        # "Please continue" message. We need to pass this to the model!
+        # =====================================================================
+        processed_msg_count = state.get('processed_message_count', 0)
+        current_msg_count = len(messages)
+        
+        if current_msg_count > processed_msg_count:
+            # There are new messages since last call - check for user messages
+            for i, msg in enumerate(messages):
+                if i < processed_msg_count:
+                    continue  # Skip already-processed messages
+                    
+                if msg.get('role') == 'user':
+                    content = msg.get('content', '')
+                    
+                    # Convert content to string if it's a list (content blocks)
+                    if isinstance(content, list):
+                        text_parts = []
+                        for item in content:
+                            if isinstance(item, dict) and 'text' in item:
+                                text_parts.append(item['text'])
+                            elif isinstance(item, str):
+                                text_parts.append(item)
+                        content = '\n'.join(text_parts)
+                    elif not isinstance(content, str):
+                        content = json.dumps(content) if content else ''
+                    
+                    if content:
+                        # Add user message as input item
+                        new_items.append({
+                            'type': 'message',
+                            'role': 'user', 
+                            'content': content,
+                        })
+                        logger.info(f'[STATE] Added NEW user message ({len(content)} chars): {content[:100]}...')
+        
+        # Update state with current message count
+        state['processed_message_count'] = current_msg_count
         
         request_params = {
             'model': model,
@@ -161,7 +240,7 @@ def openai_responses_completion(
             'store': True,  # Enable OpenAI's state management
         }
         
-        logger.info(f'[STATE] Subsequent call with {len(new_items)} new function_call_outputs')
+        logger.info(f'[STATE] Subsequent call with {len(new_items)} items (tool outputs + user messages)')
     
     else:
         # =====================================================================
@@ -288,13 +367,20 @@ def openai_responses_completion(
         logger.info(f'[OPENAI-SDK] Response received: id={response.id}')
         
         # Extract tool calls from output (for state tracking)
+        # IMPORTANT: Store call_id (used for function_call_output correlation)
         pending_tool_calls = []
         for item in (response.output or []):
             if getattr(item, 'type', None) == 'function_call':
+                # OpenAI returns both 'id' (internal) and 'call_id' (for correlation)
+                # We need call_id for function_call_output
+                call_id = getattr(item, 'call_id', None) or getattr(item, 'id', '')
+                call_name = getattr(item, 'name', '')
                 pending_tool_calls.append({
-                    'id': getattr(item, 'id', ''),
-                    'name': getattr(item, 'name', ''),
+                    'id': getattr(item, 'id', ''),  # Keep for reference
+                    'call_id': call_id,  # Used for correlation
+                    'name': call_name,
                 })
+                logger.info(f'[STATE] Tracking pending tool call: name={call_name}, call_id={call_id}')
         
         # Store the response ID for next turn
         # Include the call_ids we just processed so we don't resend them
@@ -324,7 +410,31 @@ def openai_responses_completion(
                 'completion_tokens': getattr(usage_obj, 'output_tokens', 0),
                 'total_tokens': getattr(usage_obj, 'total_tokens', 0),
             }
-            if hasattr(usage_obj, 'reasoning_tokens'):
+            
+            # CRITICAL FIX: Extract cached tokens from input_tokens_details
+            # Responses API uses 'input_tokens_details.cached_tokens' 
+            # but LLM handler expects 'prompt_tokens_details.cached_tokens' as a PromptTokensDetails object
+            # Create a proper PromptTokensDetails object for compatibility
+            input_tokens_details = getattr(usage_obj, 'input_tokens_details', None)
+            cached_tokens = 0
+            if input_tokens_details:
+                cached_tokens = getattr(input_tokens_details, 'cached_tokens', 0) or 0
+            
+            # CRITICAL: Must use PromptTokensDetails object (not dict) for llm.py compatibility
+            # llm.py accesses prompt_tokens_details.cached_tokens as an attribute
+            response_dict['usage']['prompt_tokens_details'] = PromptTokensDetails(cached_tokens=cached_tokens)
+            
+            if cached_tokens > 0:
+                logger.info(f'[CACHE] cached_tokens={cached_tokens} (prompt cache hit!)')
+            
+            # Also extract output_tokens_details for reasoning tokens
+            output_tokens_details = getattr(usage_obj, 'output_tokens_details', None)
+            if output_tokens_details:
+                reasoning_tokens = getattr(output_tokens_details, 'reasoning_tokens', 0) or 0
+                if reasoning_tokens > 0:
+                    response_dict['usage']['reasoning_tokens'] = reasoning_tokens
+                    logger.info(f'[REASONING] reasoning_tokens={reasoning_tokens}')
+            elif hasattr(usage_obj, 'reasoning_tokens'):
                 response_dict['usage']['reasoning_tokens'] = getattr(usage_obj, 'reasoning_tokens', 0)
                 logger.info(f'[REASONING] reasoning_tokens={response_dict["usage"]["reasoning_tokens"]}')
         
