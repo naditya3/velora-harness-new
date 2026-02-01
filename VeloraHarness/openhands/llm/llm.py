@@ -339,7 +339,8 @@ class LLM(RetryMixin, DebugMixin):
                         reasoning_effort=self.config.reasoning_effort,
                         conversation_id=self._conversation_id,
                     )
-                    # Response is already in OpenAI format, return directly
+                    # Process metrics and then return
+                    cost = self._post_completion(resp)
                     return resp
                 except Exception as e:
                     logger.error(f'Direct OpenAI SDK responses() failed: {e}, falling back to completion()')
@@ -374,6 +375,7 @@ class LLM(RetryMixin, DebugMixin):
                     # Calculate cost
                     cost = self._post_completion(resp)
 
+                    cost = self._post_completion(resp)
                     return resp
                 except Exception as e:
                     logger.error(f'Native Gemini SDK failed: {e}, falling back to liteLLM')
@@ -803,6 +805,7 @@ class LLM(RetryMixin, DebugMixin):
             latest_latency = self.metrics.response_latencies[-1]
             stats += 'Response Latency: %.3f seconds\n' % latest_latency.latency
 
+        logger.info(f"[POST-COMPLETION-DEBUG] response type={type(response)}, usage={response.get('usage', 'N/A')}")
         usage: Usage | None = response.get('usage')
         response_id = response.get('id', 'unknown')
 
