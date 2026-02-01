@@ -288,6 +288,31 @@ def get_instruction(instance: pd.Series, metadata: EvalMetadata):
             '   Make sure all these tests pass with your changes.\n'
             "Your thinking should be thorough and so it's fine if it's very long.\n"
         ),
+        'php': (
+            '<uploaded_files>\n'
+            f'/workspace/{workspace_dir_name}\n'
+            '</uploaded_files>\n'
+            f"I've uploaded a PHP code repository in the directory {workspace_dir_name}. Consider the following issue description:\n\n"
+            f'<issue_description>\n'
+            f'{instance.problem_statement}\n'
+            '</issue_description>\n\n'
+            'Can you help me implement the necessary changes to the repository so that the requirements specified in the <issue_description> are met?\n'
+            "The development PHP environment is already set up for you (i.e., all dependencies already installed via Composer), so you don't need to install other packages.\n"
+            'Your task is to make the necessary changes to files in the /workspace directory to ensure the <issue_description> is satisfied.\n'
+            'You may create or update unit tests when necessary to ensure correctness and coverage.\n'
+            'Follow these steps to resolve the issue:\n'
+            '1. As a first step, it might be a good idea to explore the repo to familiarize yourself with its structure.\n'
+            '2. Create a script to reproduce the error and execute it with `php <filename.php>` or run tests with `vendor/bin/phpunit` using the BashTool, to confirm the error.\n'
+            '3. Edit the sourcecode of the repo to resolve the issue.\n'
+            '4. Rerun your reproduce script or tests and confirm that the error is fixed!\n'
+            '5. Think about edgecases, add comprehensive tests for them in your reproduce script, and run them to make sure your fix handles them as well.\n'
+            f'6. Once you are done with the initial implementation, please carefully re-read the problem description and check the difference between the current code and the base commit {instance["base_commit"]}. Do you think that the issue has been completely and comprehensively solved? Write tests to check the correctness of the solution, specifically focusing on tests that may point out any remaining problems that are not yet solved. Run all of the tests in the repo and check if any of them fail, and if they do fix the code. Repeat this process of carefully reading the problem description and current implementation, testing, and fixing any problems until you are confident that the current implementation is correct. Find and run any tests in the repo that are related to:\n'
+            '   - The issue you are fixing\n'
+            '   - The files you modified\n'
+            '   - The functions or classes you changed\n'
+            '   Make sure all these tests pass with your changes.\n'
+            "Your thinking should be thorough and so it's fine if it's very long.\n"
+        ),
     }
     instruction = instructions.get(LANGUAGE.lower())
 
