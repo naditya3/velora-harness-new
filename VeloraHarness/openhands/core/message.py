@@ -68,8 +68,8 @@ class Message(BaseModel):
     output_items: list[dict] | None = None  # For GPT-5.2 reasoning accumulation
     # force string serializer
     force_string_serializer: bool = False
-    # Responses API reasoning items (for accumulation across turns)
-    output_items: list[dict] | None = None
+    # Gemini thinking blocks with thought_signatures (required for multi-turn function calling)
+    thinking_blocks: list[dict] | None = None
 
     @property
     def contains_image(self) -> bool:
@@ -162,5 +162,10 @@ class Message(BaseModel):
         # CRITICAL: Add output_items for Responses API reasoning accumulation
         if self.output_items is not None:
             message_dict['output_items'] = self.output_items
+
+        # CRITICAL: Add thinking_blocks for Gemini thought_signature preservation
+        # This is REQUIRED for Gemini 3 multi-turn function calling with thinking enabled
+        if self.thinking_blocks is not None:
+            message_dict['thinking_blocks'] = self.thinking_blocks
 
         return message_dict
