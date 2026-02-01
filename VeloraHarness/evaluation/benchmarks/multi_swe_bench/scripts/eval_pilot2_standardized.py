@@ -873,6 +873,163 @@ def evaluate_instance(
         stop_container(container_name)
 
 
+
+
+# ============================================================
+# OFFICIAL OPENHANDS FORMAT OUTPUT GENERATION
+# ============================================================
+
+def generate_official_eval_outputs(
+    output_dir: str,
+    trajectory_file: str,
+    dataset_file: str,
+    eval_report: 'EvalReport'
+) -> str:
+    """
+    Generate eval_outputs/ directory in Official OpenHands format.
+    
+    Official structure:
+        eval_outputs/<instance_id>/
+        ├── eval.sh          # Evaluation script that was run
+        ├── patch.diff       # Model's generated patch
+        ├── report.json      # Test results in official format
+        ├── run_instance.log # Execution log
+        └── test_output.txt  # Full test output
+    
+    Returns: Path to instance eval directory
+    """
+    import os
+    import json
+    
+    instance_id = str(eval_report.instance_id)
+    eval_outputs_dir = os.path.join(output_dir, "eval_outputs")
+    instance_eval_dir = os.path.join(eval_outputs_dir, instance_id)
+    os.makedirs(instance_eval_dir, exist_ok=True)
+    
+    # Load trajectory for patch
+    with open(trajectory_file, 'r') as f:
+        traj_data = json.load(f)
+    patch = traj_data.get('test_result', {}).get('git_patch', '')
+    
+    # Load dataset for test info
+    with open(dataset_file, 'r') as f:
+        dataset = json.load(f)
+    test_command = dataset.get('test_command', 'pytest')
+    test_patch = dataset.get('test_patch', '')
+    base_commit = dataset.get('base_commit', '')
+    
+    # 1. Create report.json in Official OpenHands format
+    report = {
+        instance_id: {
+            "patch_is_None": patch is None or patch == "",
+            "patch_exists": bool(patch and patch.strip()),
+            "patch_successfully_applied": not eval_report.failed_apply_patch,
+            "resolved": eval_report.resolved,
+            "tests_status": {
+                "FAIL_TO_PASS": {
+                    "success": eval_report.fail_to_pass_success,
+                    "failure": eval_report.fail_to_pass_failed
+                },
+                "PASS_TO_PASS": {
+                    "success": eval_report.pass_to_pass_success,
+                    "failure": eval_report.pass_to_pass_failed
+                },
+                "FAIL_TO_FAIL": {
+                    "success": [],
+                    "failure": []
+                },
+                "PASS_TO_FAIL": {
+                    "success": [],
+                    "failure": []
+                }
+            }
+        }
+    }
+    
+    report_file = os.path.join(instance_eval_dir, "report.json")
+    with open(report_file, 'w') as f:
+        json.dump(report, f, indent=4)
+    logger.info(f"Created: {report_file}")
+    
+    # 2. Save test_output.txt
+    test_output_file = os.path.join(instance_eval_dir, "test_output.txt")
+    with open(test_output_file, 'w') as f:
+        f.write(eval_report.test_output)
+    logger.info(f"Created: {test_output_file}")
+    
+    # 3. Save patch.diff
+    patch_file = os.path.join(instance_eval_dir, "patch.diff")
+    with open(patch_file, 'w') as f:
+        f.write(patch)
+    logger.info(f"Created: {patch_file}")
+    
+    # 4. Create eval.sh (evaluation script)
+    eval_sh = f"""#!/bin/bash
+set -uxo pipefail
+cd /app/repo
+git config --global --add safe.directory /app/repo
+git status
+git show
+git -c core.fileMode=false diff {base_commit}
+source /saved/ENV 2>/dev/null || true
+"""
+    if test_patch:
+        # Add first 100 lines of test patch for reference
+        patch_preview = '\n'.join(test_patch.split('\n')[:100])
+        eval_sh += f"""# Golden test patch applied (preview):
+# {patch_preview[:500]}...
+"""
+    eval_sh += f""": '>>>>> Start Test Output'
+{test_command}
+: '>>>>> End Test Output'
+"""
+    
+    eval_sh_file = os.path.join(instance_eval_dir, "eval.sh")
+    with open(eval_sh_file, 'w') as f:
+        f.write(eval_sh)
+    logger.info(f"Created: {eval_sh_file}")
+    
+    # 5. Create run_instance.log
+    run_log = f"""=== Velora Evaluation Run Log ===
+Instance ID: {instance_id}
+Trajectory: {trajectory_file}
+Dataset: {dataset_file}
+
+=== Patch Application ===
+Patch Size: {len(patch)} bytes
+Patch Applied: {not eval_report.failed_apply_patch}
+Test Patch Applied: {not eval_report.failed_apply_test_patch}
+
+=== Test Execution ===
+Test Command: {test_command}
+Test Timeout: {eval_report.test_timeout}
+Error During Eval: {eval_report.error_eval}
+
+=== Results ===
+Resolved: {eval_report.resolved}
+Tests Passed: {eval_report.tests_passed}
+Tests Failed: {eval_report.tests_failed}
+Tests Error: {eval_report.tests_error}
+
+=== FAIL_TO_PASS ===
+Success: {eval_report.fail_to_pass_success}
+Failed: {eval_report.fail_to_pass_failed}
+
+=== PASS_TO_PASS ===
+Success: {eval_report.pass_to_pass_success}
+Failed: {eval_report.pass_to_pass_failed}
+"""
+    if eval_report.error_message:
+        run_log += f"\n=== Error Message ===\n{eval_report.error_message}\n"
+    
+    run_log_file = os.path.join(instance_eval_dir, "run_instance.log")
+    with open(run_log_file, 'w') as f:
+        f.write(run_log)
+    logger.info(f"Created: {run_log_file}")
+    
+    return instance_eval_dir
+
+
 # ============================================================
 # CLI
 # ============================================================
@@ -946,6 +1103,16 @@ Examples:
         f.write(json.dumps(original) + '\n')
     
     logger.info(f"Results saved to: {args.output_file}")
+    
+    # Generate Official OpenHands format outputs
+    output_dir = os.path.dirname(args.output_file)
+    instance_eval_dir = generate_official_eval_outputs(
+        output_dir=output_dir,
+        trajectory_file=args.trajectory_file,
+        dataset_file=args.dataset_file,
+        eval_report=report
+    )
+    logger.info(f"Official format outputs saved to: {instance_eval_dir}")
     
     return 0 if report.resolved else 1
 
