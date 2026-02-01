@@ -39,9 +39,9 @@ OpenHands converts liteLLM responses into internal `Message` objects. During thi
    - Added extraction of `thinking_blocks` in `AgentFinishAction` handling
    - Passes `thinking_blocks` to `Message` constructor
 
-3. **`openhands/llm/gemini_native.py`**
-   - Added `DISABLE_NATIVE_GEMINI_SDK` environment variable for testing liteLLM path
-   - Kept native SDK code for future use if needed
+3. **`openhands/llm/gemini_native.py`** (REMOVED)
+   - Native SDK approach was attempted but had bugs
+   - Deleted in favor of liteLLM path which works correctly
 
 4. **`config.toml`**
    - Added retry configuration for Gemini rate limits
@@ -103,16 +103,11 @@ retry_max_wait = 180  # Up to 3 minutes
 thinkingLevel = "high"
 ```
 
-### Environment Variables
-
-- `DISABLE_NATIVE_GEMINI_SDK=true`: Forces liteLLM path instead of native SDK (for testing)
-
 ## Testing
 
 ### Run Test
 ```bash
-# Using liteLLM path (default with this fix)
-DISABLE_NATIVE_GEMINI_SDK=true bash evaluation/benchmarks/multi_swe_bench/scripts/run_velora_infer.sh \
+bash evaluation/benchmarks/multi_swe_bench/scripts/run_velora_infer.sh \
   llm.gemini \
   /path/to/task.jsonl \
   1 300 1
@@ -164,11 +159,6 @@ Gemini 3 Pro Preview has strict rate limits. The fix includes aggressive retry c
 - **Gemini 3 Pro Preview**: Fully supported with this fix
 - **Gemini 2.5**: Not affected (no thought_signatures required)
 - **Other models**: Not affected (thinking_blocks field ignored if not present)
-
-## Related Issues
-
-- liteLLM doesn't fully support thought_signatures in some edge cases
-- Native Gemini SDK path available as fallback (set `DISABLE_NATIVE_GEMINI_SDK=false`)
 
 ## Authors
 
