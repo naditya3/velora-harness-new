@@ -29,9 +29,6 @@ ENV/
 env.bak/
 venv.bak/
 
-# Local configuration (contains API keys)
-config.toml
-
 # IDE
 .idea/
 .vscode/
@@ -57,13 +54,9 @@ outputs/
 data/*.jsonl
 !data/sample_task.jsonl
 
-# Evaluation sessions (local runtime data)
-.eval_sessions/
-
 # Logs
 *.log
 logs/
-
 
 # Docker
 *.tar
@@ -77,17 +70,7 @@ Thumbs.db
 *.temp
 .cache/
 
-# Poetry
-
 # LLM completions and evaluation outputs
 llm_completions/
 evaluation_outputs/
 
-# Add VSCode integration build artifacts
-openhands/integrations/vscode/node_modules/
-openhands/integrations/vscode/out/
-openhands/integrations/vscode/*.vsix
-openhands/integrations/vscode/package-lock.json
-
-# Example files from SWE-bench
-evaluation/benchmarks/swe_bench/examples/*.jsonl
