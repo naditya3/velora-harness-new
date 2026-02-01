@@ -514,6 +514,7 @@ def run_evaluation(
 
     total_instances = len(dataset)
     pbar = tqdm(total=total_instances, desc='Instances processed')
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
     output_fp = open(output_file, 'a')
 
     try:
