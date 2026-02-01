@@ -525,7 +525,8 @@ class AgentController:
 
         elif isinstance(action, AgentFinishAction):
             # CRITICAL: Prevent premature finishing - require minimum steps
-            current_iteration = self.state.iteration if self.state.iteration is not None else 0
+            # NOTE: state.iteration is DEPRECATED - use iteration_flag.current_value
+            current_iteration = self.state.iteration_flag.current_value
             min_steps = 3  # Minimum steps before allowing finish
             
             if current_iteration < min_steps:
