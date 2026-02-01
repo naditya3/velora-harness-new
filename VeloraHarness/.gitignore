@@ -29,6 +29,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Local configuration (contains API keys)
+config.toml
+
 # IDE
 .idea/
 .vscode/
@@ -53,6 +56,9 @@ htmlcov/
 outputs/
 data/*.jsonl
 !data/sample_task.jsonl
+
+# Evaluation sessions (local runtime data)
+.eval_sessions/
 
 # Logs
 *.log
