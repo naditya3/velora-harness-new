@@ -37,8 +37,12 @@ export RUN_WITH_BROWSING=false
 export USE_HINT_TEXT=false
 export PYTHONPATH="$(pwd):$PYTHONPATH"    # CRITICAL: Ensure openhands module is found
 
-# Unset runtime container image to force fresh build
-unset RUNTIME_CONTAINER_IMAGE
+# Use pre-built runtime image if set, otherwise let OpenHands build
+if [ -z "$RUNTIME_CONTAINER_IMAGE" ]; then
+  # Use our most recent working runtime image
+  export RUNTIME_CONTAINER_IMAGE="ghcr.io/openhands/runtime:oh_v0.62.0_dit46occtvqk1xmv_1q3zwci563qrooux"
+fi
+echo "Using RUNTIME_CONTAINER_IMAGE: $RUNTIME_CONTAINER_IMAGE"
 
 # ============================================
 # ARGUMENT PARSING
@@ -157,9 +161,18 @@ echo "============================================"
 echo "DOWNLOADING DOCKER IMAGE FROM S3"
 echo "============================================"
 
-# Check if image already exists
-if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "$IMAGE_URI"; then
-  echo "✓ Docker image already loaded: $IMAGE_URI"
+# Construct expected image tags for checking
+EXPECTED_TAG1="mswebench/sweb.eval.x86_64.${INSTANCE_ID}:latest"
+EXPECTED_TAG2="mswebench/sweb.eval.x86_64.${INSTANCE_ID}"
+
+# Check if image already exists by checking for the mswebench-tagged version
+if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "$EXPECTED_TAG1"; then
+  echo "✓ Docker image already loaded: $EXPECTED_TAG1"
+  # Set IMAGE_URI to the local image for subsequent steps
+  IMAGE_URI="$EXPECTED_TAG1"
+elif docker images --format "{{.Repository}}" | grep -q "$EXPECTED_TAG2"; then
+  echo "✓ Docker image already loaded: $EXPECTED_TAG2"
+  IMAGE_URI="$EXPECTED_TAG2:latest"
 else
   echo "Downloading from S3..."
   aws s3 cp "$S3_PATH" "$S3_IMAGE_FILE"
@@ -233,14 +246,24 @@ else
   echo "Installing tmux in base image..."
   TMUX_CONTAINER="tmux_install_$$"
 
+  # Detect OS and install tmux using appropriate method
   docker run --name "$TMUX_CONTAINER" --entrypoint /bin/bash "$TAG1" -c '
-    # Fix apt sources (broken proxy settings in mswebench images)
+    # Clear any proxy settings that might interfere
     unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
-    rm -f /etc/apt/sources.list.d/*.list 2>/dev/null || true
-    echo "deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse" > /etc/apt/sources.list
-    echo "deb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse" >> /etc/apt/sources.list
-    echo "deb http://archive.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse" >> /etc/apt/sources.list
-    apt-get update && apt-get install -y --no-install-recommends tmux
+
+    # Try to install tmux using existing repos (works for both Debian and Ubuntu)
+    if command -v apt-get &>/dev/null; then
+      apt-get update 2>/dev/null || true
+      apt-get install -y --no-install-recommends tmux 2>/dev/null && exit 0
+
+      # If that failed, try with --allow-unauthenticated (for GPG issues)
+      apt-get install -y --allow-unauthenticated tmux 2>/dev/null && exit 0
+    fi
+
+    # Fallback: check if tmux binary exists in common locations
+    [ -f /usr/bin/tmux ] && exit 0
+
+    exit 1
   '
 
   if [ $? -eq 0 ]; then
@@ -302,10 +325,11 @@ if 'image_storage_uri' in data:
     del data['image_storage_uri']
     print("Removed image_storage_uri from dataset")
 
+# Write as JSONL (single line, no indentation) for load_dataset compatibility
 with open("$MODIFIED_DATASET", 'w') as f:
-    json.dump(data, f, indent=2)
+    f.write(json.dumps(data) + '\n')
 
-print(f"Created modified dataset: $MODIFIED_DATASET")
+print(f"Created modified dataset (JSONL): $MODIFIED_DATASET")
 PYEOF
 
 echo "Modified dataset: $MODIFIED_DATASET"
