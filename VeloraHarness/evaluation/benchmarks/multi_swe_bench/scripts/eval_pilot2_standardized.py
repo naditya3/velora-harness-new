@@ -844,6 +844,48 @@ Examples:
     with open(args.output_file, 'w') as f:
         f.write(json.dumps(original) + '\n')
     
+    # Write evals_report artifacts beside output.jsonl
+    evals_report_dir = os.path.join(os.path.dirname(args.output_file), "evals_report")
+    os.makedirs(evals_report_dir, exist_ok=True)
+
+    model_patch = extract_model_patch(original)
+
+    report_payload = {
+        "instance_id": report.instance_id,
+        "resolved": report.resolved,
+        "tests_passed": report.tests_passed,
+        "tests_failed": report.tests_failed,
+        "tests_error": report.tests_error,
+        "fail_to_pass_success": report.fail_to_pass_success,
+        "fail_to_pass_failed": report.fail_to_pass_failed,
+        "pass_to_pass_success": report.pass_to_pass_success,
+        "pass_to_pass_failed": report.pass_to_pass_failed,
+        "error_eval": report.error_eval,
+        "failed_apply_patch": report.failed_apply_patch,
+        "failed_apply_test_patch": report.failed_apply_test_patch,
+        "test_timeout": report.test_timeout,
+        "error_message": report.error_message,
+    }
+
+    with open(os.path.join(evals_report_dir, "report.json"), "w") as f:
+        json.dump(report_payload, f, indent=2)
+
+    with open(os.path.join(evals_report_dir, "patch.diff"), "w") as f:
+        f.write(model_patch or "")
+
+    with open(os.path.join(evals_report_dir, "test_output.txt"), "w") as f:
+        f.write(report.test_output or "")
+
+    with open(os.path.join(evals_report_dir, "run_instance.log"), "w") as f:
+        f.write("eval_pilot2_standardized.py summary\n")
+        f.write(f"instance_id: {report.instance_id}\n")
+        f.write(f"resolved: {report.resolved}\n")
+        f.write(f"tests_passed: {report.tests_passed}\n")
+        f.write(f"tests_failed: {report.tests_failed}\n")
+        f.write(f"tests_error: {report.tests_error}\n")
+        if report.error_message:
+            f.write(f"error_message: {report.error_message}\n")
+
     logger.info(f"Results saved to: {args.output_file}")
     
     return 0 if report.resolved else 1
@@ -851,4 +893,3 @@ Examples:
 
 if __name__ == "__main__":
     exit(main())
-
