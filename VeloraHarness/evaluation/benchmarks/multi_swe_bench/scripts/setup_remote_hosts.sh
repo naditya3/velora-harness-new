@@ -302,7 +302,7 @@ ENVEOF"
   # CHECK 4: Evaluation Script
   # ============================================
   log_step "Checking evaluation script..."
-  EVAL_SCRIPT_EXISTS=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "[ -f '${REMOTE_VELORA_PATH}/evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_with_s3.sh' ] && echo 'YES' || echo 'NO'")
+  EVAL_SCRIPT_EXISTS=$(ssh $SSH_OPTS "${SSH_USER}@${host}" "[ -f '${REMOTE_VELORA_PATH}/evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_swe.sh' ] && echo 'YES' || echo 'NO'")
 
   if [ "$EVAL_SCRIPT_EXISTS" = "YES" ]; then
     log_success "Evaluation script exists"

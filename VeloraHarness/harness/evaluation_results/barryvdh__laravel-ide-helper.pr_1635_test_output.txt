@@ -1,0 +1,1227 @@
+=== Resetting modified tracked files ===
+HEAD detached at c33eacd
+nothing to commit, working tree clean
+c33eacd Add templates to Eloquent (#1634)
+=== Applying test_patch ===
+/tmp/test_patch.diff:105: trailing whitespace.
+     * 
+/tmp/test_patch.diff:113: trailing whitespace.
+         * @return \Illuminate\Foundation\Configuration\ApplicationBuilder 
+/tmp/test_patch.diff:114: trailing whitespace.
+         * @static 
+/tmp/test_patch.diff:122: trailing whitespace.
+         * @return string 
+/tmp/test_patch.diff:123: trailing whitespace.
+         * @static 
+warning: squelched 8515 whitespace errors
+warning: 8520 lines add whitespace errors.
+TEST_PATCH_APPLY_SUCCESS
+=== Applying code patch ===
+PATCH_APPLY_SUCCESS
+=== Running composer install ===
+Installing dependencies from lock file (including require-dev)
+Verifying lock file contents can be installed on current platform.
+Nothing to install, update or remove
+Generating autoload files
+106 packages you are using are looking for funding.
+Use the `composer fund` command to find out more!
+=== Running tests ===
+PHPUnit 10.5.63 by Sebastian Bergmann and contributors.
+
+Runtime:       PHP 8.2.30
+Configuration: /app/repo/phpunit.xml.dist
+
+..FException: No application encryption key has been specified.
+Skipping \Illuminate\Support\Facades\Crypt.
+Exception: No application encryption key has been specified.
+Skipping \Illuminate\Support\Facades\Crypt.
+.Exception: No application encryption key has been specified.
+Skipping \Illuminate\Support\Facades\Crypt.
+Exception: No application encryption key has been specified.
+Skipping \Illuminate\Support\Facades\Crypt.
+...FFFFFFF.FFFFFFFFFFFFFFFFFFFFFFFFFFFFF..FFFF..........F.FFF 65 / 71 ( 91%)
+F.F...                                                            71 / 71 (100%)
+
+Time: 00:04.578, Memory: 76.50 MB
+
+There were 47 failures:
+
+1) Barryvdh\LaravelIdeHelper\Tests\Console\EloquentCommandTest::testCommand
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ '/**
+- * 
+- *
+  * @mixin \Eloquent
+  * @mixin \Illuminate\Database\Eloquent\Builder
+  * @mixin \Illuminate\Database\Query\Builder
+  */
+ abstract class Model implements'
+
+/app/repo/tests/SnapshotTxtDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/TestCase.php:55
+/app/repo/tests/Console/EloquentCommandTest.php:45
+
+2) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\AdvancedCasts\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property \Illuminate\Support\Carbon $cast_to_date_serialization
+  * @property \Illuminate\Support\Carbon $cast_to_datetime_serialization
+  * @property \Illuminate\Support\Carbon $cast_to_custom_datetime
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/AdvancedCasts/Test.php:22
+
+3) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\AllowGlobDirectory\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/AllowGlobDirectory/Test.php:42
+/app/repo/vendor/bin/phpunit:122
+
+4) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\ArrayCastsWithComment\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property array<int, string>|null $cast_to_array -- These three should not be duplicated
+  * @property array<int, string> $cast_to_json some-description
+  * @property \Illuminate\Support\Collection<int, string> $cast_to_collection some-description
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/ArrayCastsWithComment/Test.php:22
+
+5) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Attributes\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $name
+  * @property string|null $name_read
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property int $diverging_type_hinted_get_and_set
+  * @property string|null $name
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/Attributes/Test.php:22
+
+6) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Comment\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\MorphTo;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string $both_same_name I'm a getter
+  * @property string $both_without_getter_comment
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/Comment/Test.php:22
+
+7) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\CustomCollection\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\HasMany;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property-read SimpleCollection<int, Simple> $relationHasMany
+  * @property-read int|null $relation_has_many_count
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/CustomCollection/Test.php:22
+
+8) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\CustomDate\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property \Carbon\CarbonImmutable|null $created_at
+  * @property \Carbon\CarbonImmutable|null $updated_at
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|CustomDate newModelQuery()
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/CustomDate/Test.php:39
+
+9) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\DoesNotGeneratePhpdocWithExternalEloquentBuilder\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ 
+ namespace Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\DoesNotGeneratePhpdocWithExternalEloquentBuilder\Models{
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/DoesNotGeneratePhpdocWithExternalEloquentBuilder/Test.php:29
+
+10) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\DynamicRelations\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\HasOne;
+ 
+ /**
+- * 
+- *
+  * @property-read \Illuminate\Database\Eloquent\Collection<int, Dynamic> $regularHasMany
+  * @property-read int|null $regular_has_many_count
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|Dynamic newModelQuery()
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/DynamicRelations/Test.php:31
+
+11) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Factories\Test::testFactory
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
++ * @property-read \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Factories\Models\TFactory|null $use_factory
+  * @method static \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Factories\CustomSpace\ModelWithCustomNamespaceFactory factory($count = null, $state = [])
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|ModelWithCustomNamespace newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|ModelWithCustomNamespace newQuery()
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
++ * @property-read \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Factories\Models\TFactory|null $use_factory
+  * @method static \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Factories\Factories\ModelWithFactoryFactory factory($count = null, $state = [])
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|ModelWithFactory newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|ModelWithFactory newQuery()
+@@ @@
+ namespace Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Factories\Models;
+ 
+ /**
+- * 
+- *
++ * @property-read \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Factories\Models\TFactory|null $use_factory
+  * @method static \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Factories\Factories\ModelWithNestedFactoryFactory factory($count = null, $state = [])
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|ModelWithNestedFactory newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|ModelWithNestedFactory newQuery()
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
++ * @property-read \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Factories\Models\TFactory|null $use_factory
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|ModelWithoutFactory newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|ModelWithoutFactory newQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|ModelWithoutFactory query()
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/Factories/Test.php:28
+
+12) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GenerateBasicPhpDocWithEnumDefaults\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GenerateBasicPhpDocWithEnumDefaults/Test.php:22
+
+13) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GenerateBasicPhpdoc\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GenerateBasicPhpdoc/Test.php:22
+
+14) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GenerateBasicPhpdocCamel\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $charNullable
+  * @property string $charNotNullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GenerateBasicPhpdocCamel/Test.php:29
+
+15) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GenerateBasicPhpdocFinal\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GenerateBasicPhpdocFinal/Test.php:22
+
+16) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GenerateMixinCollection\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ 
+ namespace Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GenerateMixinCollection\Models{
+ /**
+- * 
+- *
+  * @property-read \Illuminate\Support\Collection<int, string> $collection
+  * @property-read \Illuminate\Support\Collection<\Illuminate\Support\Collection, \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GenerateMixinCollection\NonModels\CollectionModel<\Illuminate\Support\Collection, \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GenerateMixinCollection\NonModels\CollectionModel<int, \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GenerateMixinCollection\NonModels\NonModel>>> $collection_with_nested_template
+  * @property-read \Illuminate\Support\Collection<int, \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GenerateMixinCollection\NonModels\NonModel> $collection_with_non_model_template
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GenerateMixinCollection/Test.php:22
+
+17) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GeneratePhpdocWithExternalEloquentBuilder\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ 
+ namespace Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GeneratePhpdocWithExternalEloquentBuilder\Models{
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GeneratePhpdocWithExternalEloquentBuilder/Test.php:22
+
+18) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GeneratePhpdocWithExternalEloquentBuilderWithFqn\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GeneratePhpdocWithExternalEloquentBuilderWithFqn/Test.php:22
+
+19) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GeneratePhpdocWithForcedFqn\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\SoftDeletes;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GeneratePhpdocWithForcedFqn/Test.php:29
+
+20) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GeneratePhpdocWithFqn\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Support\Carbon;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property CastType $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GeneratePhpdocWithFqn/Test.php:22
+
+21) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GeneratePhpdocWithFqnInExternalFile\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ 
+ namespace Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GeneratePhpdocWithFqnInExternalFile\Models{
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GeneratePhpdocWithFqnInExternalFile/Test.php:22
+
+22) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GeneratePhpdocWithMixin\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ 
+ namespace Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GeneratePhpdocWithMixin\Models{
+ /**
+- * 
+- *
+  * @property $someProp
+  * @method someMethod(string $method)
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|FinalPost newModelQuery()
+@@ @@
+ 
+ namespace Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GeneratePhpdocWithMixin\Models{
+ /**
+- * 
+- *
+  * @property $someProp
+  * @method someMethod(string $method)
+  * @property int $id
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GeneratePhpdocWithMixin/Test.php:22
+
+23) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\GenericsSyntaxDisabled\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\HasMany;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property-read \Illuminate\Database\Eloquent\Collection|Simple[] $regularBelongsToMany
+  * @property-read int|null $regular_belongs_to_many_count
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/GenericsSyntaxDisabled/Test.php:29
+
+24) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Getter\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property-read int|null $attribute_return_type_int_or_null
+  * @property-read array $attribute_returns_array
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/Getter/Test.php:22
+
+25) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Ignored\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|NotIgnored newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|NotIgnored newQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|NotIgnored query()
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/Ignored/Test.php:32
+
+26) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Interfaces\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ 
+ namespace Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Interfaces\Models{
+ /**
+- * 
+- *
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|User newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|User newQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|User query()
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/Interfaces/Test.php:22
+
+27) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\LaravelCustomCasts\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\LaravelCustomCasts\Casts\CastedProperty $casted_property_with_return_type
+  * @property \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\LaravelCustomCasts\Casts\CastedProperty $casted_property_with_return_docblock
+  * @property \Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\LaravelCustomCasts\Casts\CastedProperty $casted_property_with_return_docblock_fqn
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/LaravelCustomCasts/Test.php:22
+
+28) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\MagicWhere\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/MagicWhere/Test.php:29
+
+29) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\ModelHooks\Test::test
+Failed asserting that two strings are identical.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property-read string $custom
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|Simple custom($custom)
+
+/app/repo/tests/Console/ModelsCommand/ModelHooks/Test.php:90
+
+30) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Morphs\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\MorphTo;
+ 
+ /**
+- * 
+- *
+  * @property string $relation_morph_to_type
+  * @property int $relation_morph_to_id
+  * @property string|null $nullable_relation_morph_to_type
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/Morphs/Test.php:22
+
+31) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\PHPStormNoInspection\Test::testNoinspectionNotPresent
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|Simple newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|Simple newQuery()
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/PHPStormNoInspection/Test.php:22
+
+32) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\PHPStormNoInspection\Test::testNoinspectionPresent
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|Simple newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|Simple newQuery()
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/PHPStormNoInspection/Test.php:36
+
+33) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Pivot\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property-read DifferentCustomPivot|CustomPivot|null $pivot
+  * @property-read \Illuminate\Database\Eloquent\Collection<int, ModelWithPivot> $relationCustomPivotUsingSameAccessor
+  * @property-read int|null $relation_custom_pivot_using_same_accessor_count
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\Pivot;
+ 
+ /**
+- * 
+- *
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|CustomPivot newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|CustomPivot newQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|CustomPivot query()
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\Pivot;
+ 
+ /**
+- * 
+- *
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|DifferentCustomPivot newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|DifferentCustomPivot newQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|DifferentCustomPivot query()
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/Pivot/Test.php:22
+
+34) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\QueryScopes\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ namespace Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\QueryScopes\Models;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|PostParent active()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|PostParent newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|PostParent newQuery()
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/QueryScopes/Test.php:22
+
+35) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\RelationCountProperties\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\HasMany;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property string|null $char_nullable
+  * @property string $char_not_nullable
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/RelationCountProperties/Test.php:29
+
+36) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Relations\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\BelongsTo;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property int $not_null_column_with_foreign_key_constraint
+  * @property int $not_null_column_with_no_foreign_key_constraint
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\BelongsTo;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property int $not_null_column_with_foreign_key_constraint
+  * @property int $not_null_column_with_no_foreign_key_constraint
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\MorphToMany;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property-read Simple|null $relationBelongsTo
+  * @property-read AnotherModel|null $relationBelongsToInAnotherNamespace
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/Relations/Test.php:47
+
+37) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Relations\Test::testRelationNotNullable
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\BelongsTo;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property int $not_null_column_with_foreign_key_constraint
+  * @property int $not_null_column_with_no_foreign_key_constraint
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\BelongsTo;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property int $not_null_column_with_foreign_key_constraint
+  * @property int $not_null_column_with_no_foreign_key_constraint
+@@ @@
+ use Illuminate\Database\Eloquent\Relations\MorphToMany;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @property-read Simple $relationBelongsTo
+  * @property-read AnotherModel $relationBelongsToInAnotherNamespace
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/Relations/Test.php:63
+
+38) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\SimpleCasts\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $cast_to_int
+  * @property int $cast_to_integer
+  * @property float $cast_to_real
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/SimpleCasts/Test.php:22
+
+39) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\SoftDeletes\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\SoftDeletes;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|Simple newModelQuery()
+  * @method static \Illuminate\Database\Eloquent\Builder<static>|Simple newQuery()
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/SoftDeletes/Test.php:22
+
+40) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\UnionTypes\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Query\Builder;
+ 
+ /**
+- * 
+- *
+  * @property-read string|int|null $foo
+  * @property-read \Illuminate\Database\Eloquent\Collection<int, UnionTypeModel> $withUnionTypeReturn
+  * @property-read int|null $with_union_type_return_count
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/UnionTypes/Test.php:22
+
+41) Barryvdh\LaravelIdeHelper\Tests\Console\ModelsCommand\Variadic\Test::test
+Failed asserting that two strings are identical.
+
+Snapshots can be updated by passing `-d --update-snapshots` through PHPUnit's CLI arguments.
+--- Expected
++++ Actual
+@@ @@
+ use Illuminate\Database\Eloquent\Model;
+ 
+ /**
+- * 
+- *
+  * @property int $id
+  * @method static Builder<static>|Simple newModelQuery()
+  * @method static Builder<static>|Simple newQuery()
+
+/app/repo/tests/SnapshotPhpDriver.php:24
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/Snapshot.php:55
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:203
+/app/repo/vendor/spatie/phpunit-snapshot-assertions/src/MatchesSnapshots.php:61
+/app/repo/tests/Console/ModelsCommand/AbstractModelsCommand.php:58
+/app/repo/tests/Console/ModelsCommand/Variadic/Test.php:22
+
+42) Barryvdh\LaravelIdeHelper\Tests\MacroTest::testOutput
+Failed asserting that two strings are identical.
+--- Expected
++++ Actual
+@@ @@
+ '/**
+- * 
+- *
+  * @param string $foo
+  * @param int $bar
+- * @return string 
++ * @return string
+  * @see \Barryvdh\LaravelIdeHelper\Tests\UrlGeneratorMacroClass::__invoke()
+- * @static 
++ * @static
+  */'
+
+/app/repo/tests/MacroTest.php:254
+
+43) Barryvdh\LaravelIdeHelper\Tests\MethodTest::testOutput
+Failed asserting that two strings are identical.
+--- Expected
++++ Actual
+@@ @@
+ '/**
+- * 
+- *
+  * @param string $last
+  * @param string $first
+  * @param string $middle
+- * @static 
++ * @static
+  */'
+
+/app/repo/tests/MethodTest.php:47
+
+44) Barryvdh\LaravelIdeHelper\Tests\MethodTest::testEloquentBuilderOutput
+Failed asserting that two strings are identical.
+--- Expected
++++ Actual
+@@ @@
+  * @param array $values
+  * @param array|string $uniqueBy
+  * @param array|null $update
+- * @return int 
+- * @static 
++ * @return int
++ * @static
+  */'
+
+/app/repo/tests/MethodTest.php:78
+
+45) Barryvdh\LaravelIdeHelper\Tests\MethodTest::testEloquentBuilderNormalizedReturnType
+Failed asserting that two strings are identical.
+--- Expected
++++ Actual
+@@ @@
+  * @param mixed $operator
+  * @param mixed $value
+  * @param string $boolean
+- * @return \Illuminate\Database\Eloquent\Builder<static> 
+- * @static 
++ * @return \Illuminate\Database\Eloquent\Builder<static>
++ * @static
+  */'
+
+/app/repo/tests/MethodTest.php:111
+
+46) Barryvdh\LaravelIdeHelper\Tests\MethodTest::testQueryBuilderNormalizedReturnType
+Failed asserting that two strings are identical.
+--- Expected
++++ Actual
+@@ @@
+  * @param string|array|\Illuminate\Contracts\Database\Query\Expression $columns
+  * @param string $boolean
+  * @param bool $not
+- * @return \Illuminate\Database\Eloquent\Builder<static> 
+- * @static 
++ * @return \Illuminate\Database\Eloquent\Builder<static>
++ * @static
+  */'
+
+/app/repo/tests/MethodTest.php:142
+
+47) Barryvdh\LaravelIdeHelper\Tests\MethodTest::testClassAliases
+Failed asserting that two strings are identical.
+--- Expected
++++ Actual
+@@ @@
+ '/**
+- * 
+- *
+- * @return \Illuminate\Foundation\Application 
+- * @static 
++ * @return \Illuminate\Foundation\Application
++ * @static
+  */'
+
+/app/repo/tests/MethodTest.php:187
+
+FAILURES!
+Tests: 71, Assertions: 213, Failures: 47.
+TEST_EXIT_CODE=1
+
++ cd /app/repo
++ echo '=== Resetting modified tracked files ==='
++ git checkout -- .
++ git status
++ git log -1 --oneline
++ echo '=== Applying test_patch ==='
++ git apply --check /tmp/test_patch.diff
++ git apply /tmp/test_patch.diff
++ TEST_PATCH_RESULT=0
++ '[' 0 -ne 0 ']'
++ echo TEST_PATCH_APPLY_SUCCESS
++ echo '=== Applying code patch ==='
++ git apply --check /tmp/patch.diff
++ git apply /tmp/patch.diff
++ echo PATCH_APPLY_SUCCESS
++ '[' -f composer.json ']'
++ echo '=== Running composer install ==='
++ composer install --no-interaction
++ '[' -f package.json ']'
++ '[' -f Cargo.toml ']'
++ '[' -f go.mod ']'
++ '[' -f Gemfile ']'
++ echo '=== Running tests ==='
++ vendor/bin/phpunit
++ TEST_RESULT=1
++ echo TEST_EXIT_CODE=1
