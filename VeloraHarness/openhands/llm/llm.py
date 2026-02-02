@@ -229,6 +229,9 @@ class LLM(RetryMixin, DebugMixin):
         # Add completion_kwargs if present
         if self.config.completion_kwargs is not None:
             kwargs.update(self.config.completion_kwargs)
+            # If thinking parameter is present, add to allowed_openai_params to prevent drop_params from filtering
+            if 'thinking' in self.config.completion_kwargs:
+                kwargs['allowed_openai_params'] = kwargs.get('allowed_openai_params', []) + ['thinking']
 
         self._completion = partial(
             litellm_completion,
