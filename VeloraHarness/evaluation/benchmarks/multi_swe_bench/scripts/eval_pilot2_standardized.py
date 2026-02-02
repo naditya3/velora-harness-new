@@ -163,6 +163,7 @@ class EvalReport:
     pass_to_pass_failed: List[str]
     test_output: str
     error_message: str = ""
+    execution_error: str = ""  # Track why test execution failed
 
 
 # ============================================================
@@ -295,15 +296,51 @@ def extract_model_patch(trajectory: Dict[str, Any]) -> str:
 # EVAL SCRIPT GENERATION (following test_spec.py:make_eval_test_spec)
 # ============================================================
 
+def detect_repo_directory(container_name: str) -> str:
+    """
+    Detect the actual repository directory in the container.
+
+    Tries in order:
+    1. /testbed (standard SWE-bench location, most images)
+    2. /app/repo (PHP images)
+
+    Returns: Path to repository directory
+    """
+    # Try /testbed first (most common)
+    returncode, stdout, stderr = run_docker_command(
+        container_name,
+        "test -d /testbed && echo 'exists' || echo 'missing'",
+        timeout=10
+    )
+
+    if returncode == 0 and 'exists' in stdout:
+        logger.info("Detected repository directory: /testbed")
+        return "/testbed"
+
+    # Fallback to /app/repo (PHP images)
+    returncode, stdout, stderr = run_docker_command(
+        container_name,
+        "test -d /app/repo && echo 'exists' || echo 'missing'",
+        timeout=10
+    )
+
+    if returncode == 0 and 'exists' in stdout:
+        logger.info("Detected repository directory: /app/repo")
+        return "/app/repo"
+
+    # Default to /testbed if detection fails
+    logger.warning("Could not detect repository directory, defaulting to /testbed")
+    return "/testbed"
+
+
 def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int = 900) -> tuple:
     """
     Run the test command from the dataset, following client's test_spec.py flow.
 
     Returns: (returncode, stdout, stderr)
     """
-    # Use /testbed for mswebench images (standard SWE-bench location)
-    # Fallback to /app/repo for older OpenHands images
-    repo_directory = "/testbed"
+    # Detect the actual repository directory in the container
+    repo_directory = detect_repo_directory(container_name)
     test_patch_raw = instance.get("test_patch", "")
     test_command = instance.get("test_command", "pytest")
     
@@ -763,10 +800,15 @@ def evaluate_instance(
                 pass_to_pass_success=[],
                 pass_to_pass_failed=pass_to_pass,
                 test_output="",
-                error_message="Failed to start container"
+                error_message="Failed to start container",
+                execution_error="Container failed to start"
             )
-        
-        # Step 4: Apply model patch
+
+        # Step 4: Detect repository directory
+        repo_directory = detect_repo_directory(container_name)
+        logger.info(f"Using repository directory: {repo_directory}")
+
+        # Step 5: Apply model patch
         if model_patch:
             logger.info("Applying model patch...")
             with tempfile.NamedTemporaryFile(mode='w', suffix='.diff', delete=False) as f:
@@ -779,44 +821,44 @@ def evaluate_instance(
             )
             os.unlink(patch_file)
             
-            # Try git apply first, then patch
+            # Try git apply first, then patch (using detected repo directory)
             returncode, stdout, stderr = run_docker_command(
                 container_name,
-                "cd /testbed && git apply -v /tmp/model.patch 2>&1 || "
-                "patch --batch --fuzz=5 -p1 -i /tmp/model.patch 2>&1"
+                f"cd {repo_directory} && git apply -v /tmp/model.patch 2>&1 || "
+                f"patch --batch --fuzz=5 -p1 -i /tmp/model.patch 2>&1"
             )
             
             if returncode != 0 and "FAILED" in stdout:
                 logger.warning("Patch application may have failed")
         
-        # Step 5: ALWAYS reset test files to ensure consistent evaluation
+        # Step 6: ALWAYS reset test files to ensure consistent evaluation
         # This removes any model-created test files and restores original test files
         # FIX: Previously we skipped reset when golden patch exists, but this allowed
         # model-created test files to pollute the test run (e.g., GPT's test_namespace_layout.py)
         logger.info("Resetting test files to clean state...")
-        
+
         # First, remove any NEW test files created by the model (git clean)
         run_docker_command(
             container_name,
-            "cd /testbed && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
+            f"cd {repo_directory} && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
         )
 
         # Then, restore modified test files to original state (git checkout)
         run_docker_command(
             container_name,
-            "cd /testbed && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
+            f"cd {repo_directory} && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
         )
         
         logger.info("Test files reset complete")
-        
-        # Step 6: Run test command (applies test patch and runs tests)
+
+        # Step 7: Run test command (applies test patch and runs tests)
         returncode, stdout, stderr = run_test_command(
             container_name, dataset, timeout=timeout
         )
-        
+
         full_output = stdout + stderr
-        
-        # Step 7: Parse test output using appropriate parser based on test_output_parser
+
+        # Step 8: Parse test output using appropriate parser based on test_output_parser
         if 'phpunit' in test_output_parser.lower():
             test_status_map = parse_phpunit_output(full_output)
         elif 'unittest' in test_output_parser.lower():
@@ -826,15 +868,64 @@ def evaluate_instance(
             test_status_map = parse_pytest_output(full_output)
         
         logger.info(f"Parsed {len(test_status_map)} test results")
-        
-        # Step 8: Grade results
+
+        # Step 9: Grade results
         grade_results = grade_test_results(test_status_map, fail_to_pass, pass_to_pass)
-        
-        # Determine resolved status
+
+        # CRITICAL FIX: Validate that tests actually ran before determining resolved status
+        # Check for common error patterns that indicate tests never executed
+        execution_error = ""
+        test_execution_succeeded = True
+
+        # Check 1: Test output must not be empty
+        if not full_output or len(full_output.strip()) < 10:
+            execution_error = "Test output is empty or too short"
+            test_execution_succeeded = False
+            logger.warning(f"Test execution failed: {execution_error}")
+
+        # Check 2: Detect bash errors indicating tests didn't run
+        bash_error_patterns = [
+            "No such file or directory",
+            "command not found",
+            "Permission denied",
+            "cannot access",
+            "does not exist"
+        ]
+        for pattern in bash_error_patterns:
+            if pattern in full_output:
+                execution_error = f"Bash error detected: {pattern}"
+                test_execution_succeeded = False
+                logger.warning(f"Test execution failed: {execution_error}")
+                break
+
+        # Check 3: At least some tests must have been parsed
+        # Empty test_status_map means parser couldn't find any test results
+        total_tests_detected = len(test_status_map)
+        if total_tests_detected == 0 and (fail_to_pass or pass_to_pass):
+            # We expected tests but found none - this is a failure
+            execution_error = "No test results parsed from output (parser found 0 tests)"
+            test_execution_succeeded = False
+            logger.warning(f"Test execution failed: {execution_error}")
+
+        # Check 4: If we have F2P/P2P tests defined but got 0 passed/failed/error counts, tests didn't run
+        if (fail_to_pass or pass_to_pass):
+            total_test_count = (grade_results['tests_passed'] +
+                              grade_results['tests_failed'] +
+                              grade_results['tests_error'])
+            if total_test_count == 0:
+                execution_error = "Test counts are all zero despite having F2P/P2P tests defined"
+                test_execution_succeeded = False
+                logger.warning(f"Test execution failed: {execution_error}")
+
+        # Determine resolved status - ONLY if tests executed successfully
         all_f2p_pass = len(grade_results['fail_to_pass_failed']) == 0 and len(grade_results['fail_to_pass_success']) > 0
         all_p2p_pass = len(grade_results['pass_to_pass_failed']) == 0
-        resolved = all_f2p_pass and all_p2p_pass
-        
+
+        # CRITICAL: resolved = true ONLY when tests executed AND all conditions met
+        resolved = False
+        if test_execution_succeeded and all_f2p_pass and all_p2p_pass:
+            resolved = True
+
         return EvalReport(
             instance_id=instance_id,
             resolved=resolved,
@@ -849,7 +940,8 @@ def evaluate_instance(
             fail_to_pass_failed=grade_results['fail_to_pass_failed'],
             pass_to_pass_success=grade_results['pass_to_pass_success'],
             pass_to_pass_failed=grade_results['pass_to_pass_failed'],
-            test_output=full_output
+            test_output=full_output,
+            execution_error=execution_error
         )
         
     except Exception as e:
@@ -871,7 +963,8 @@ def evaluate_instance(
             pass_to_pass_success=[],
             pass_to_pass_failed=[],
             test_output="",
-            error_message=str(e)
+            error_message=str(e),
+            execution_error=""
         )
     finally:
         stop_container(container_name)
