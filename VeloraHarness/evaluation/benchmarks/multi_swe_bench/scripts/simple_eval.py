@@ -373,13 +373,19 @@ def main():
         task = dataset_map[instance_id]
         
         # Determine Docker image
+        # Use image_storage_uri if available (for SWE-Lancer/custom images), otherwise use default
         storage_uri = task.get('image_storage_uri', '')
-        if storage_uri:
+        if storage_uri and not storage_uri.startswith('s3://'):
+            # Use direct docker image reference if not an S3 path
             image_name = storage_uri
             print(f"Using image_storage_uri from dataset: {image_name}")
         else:
+            # Use default mswebench format for standard tasks
             image_name = f"mswebench/sweb.eval.x86_64.{instance_id}:latest"
             print(f"Using default image format: {image_name}")
+        
+        # Log the storage URI for reference
+        print(f"Image storage URI: {storage_uri if storage_uri else 'N/A'}")
         
         # Extract patch
         patch = extract_patch(output)
