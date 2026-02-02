@@ -90,3 +90,11 @@ openhands/integrations/vscode/package-lock.json
 
 # Example files from SWE-bench
 evaluation/benchmarks/swe_bench/examples/*.jsonl
+
+#additional ignore for VeloraHarness
+run_evals.sh
+run_conan_8x.xsh
+run_selected_instances.py
+swe_evo_all_instances2.csv
+tarace_n_evals.sh
+trace_gen.sh

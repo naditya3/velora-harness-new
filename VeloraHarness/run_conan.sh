@@ -12,12 +12,12 @@ cd /home/ubuntu/Velora_SWE_Harness/VeloraHarness/openhands
 SITE_PACKAGES=$(poetry run python -c "import site; print(site.getsitepackages()[0])")
 export PYTHONPATH="${SITE_PACKAGES}:/home/ubuntu/Velora_SWE_Harness/VeloraHarness"
 
-poetry run python /home/ubuntu/Velora_SWE_Harness/VeloraHarness/evaluation/benchmarks/multi_swe_bench/run_infer.py \
+poetry run python <path to >run_infer.py \
     --agent-cls CodeActAgent \
-    --llm-config llm.gpt \
-    --max-iterations 900 \
+    --llm-config llm.gpt_codex \
+    --max-iterations 1000 \
     --eval-num-workers 1 \
     --eval-n-limit 1 \
-    --dataset /home/ubuntu/Velora_SWE_Harness/VeloraHarness/data/datasets/sumit.jsonl \
+    --dataset 
     --split train \
-    --eval-note conan_modified_without_browsing
+    --eval-note testing
