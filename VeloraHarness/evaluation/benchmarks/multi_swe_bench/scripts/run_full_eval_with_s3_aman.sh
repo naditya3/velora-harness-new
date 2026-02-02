@@ -31,20 +31,124 @@ set -eo pipefail
 # ============================================
 # VELORA-SPECIFIC ENVIRONMENT VARIABLES
 # ============================================
-export DOCKER_BUILDKIT=1                    # Enable buildx for better caching
+export DOCKER_BUILDKIT=0                    # CRITICAL: Prevents buildx failures
 export EVAL_DOCKER_IMAGE_PREFIX="mswebench" # Our Docker image prefix
 export USE_INSTANCE_IMAGE=true              # Use instance-specific images
 export LANGUAGE=python                      # Our tasks are Python
 export RUN_WITH_BROWSING=false
 export USE_HINT_TEXT=false
-export PYTHONPATH="$(pwd):$PYTHONPATH"    # CRITICAL: Ensure openhands module is found
 
-# Use pre-built runtime image if set, otherwise let OpenHands build
-if [ -z "$RUNTIME_CONTAINER_IMAGE" ]; then
-  # Use our most recent working runtime image
-  export RUNTIME_CONTAINER_IMAGE="ghcr.io/openhands/runtime:oh_v0.62.0_dit46occtvqk1xmv_1q3zwci563qrooux"
+# Note: RUNTIME_CONTAINER_IMAGE="skip" removed - it causes "invalid reference format" errors
+
+# Add current directory to PYTHONPATH for openhands module resolution
+export PYTHONPATH="$(pwd):$PYTHONPATH"
+
+# ============================================
+# PRE-RUN RESOURCE CHECK AND CLEANUP
+# ============================================
+echo "============================================"
+echo "PRE-RUN RESOURCE CHECK AND CLEANUP"
+echo "============================================"
+
+# Function to check available disk space (returns available GB)
+check_disk_space() {
+  local available_kb=$(df -k . | tail -1 | awk '{print $4}')
+  local available_gb=$((available_kb / 1024 / 1024))
+  echo $available_gb
+}
+
+# Function to check available memory (returns available GB)
+check_memory() {
+  local available_kb=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+  local available_gb=$((available_kb / 1024 / 1024))
+  echo $available_gb
+}
+
+# Check disk space before proceeding
+DISK_GB=$(check_disk_space)
+echo "Available disk space: ${DISK_GB}GB"
+
+# Minimum required space: 10GB
+MIN_DISK_GB=10
+
+if [ "$DISK_GB" -lt "$MIN_DISK_GB" ]; then
+  echo "WARNING: Low disk space (${DISK_GB}GB < ${MIN_DISK_GB}GB). Running aggressive cleanup..."
+
+  # Stop all running containers (except critical ones)
+  echo "Stopping all openhands-related containers..."
+  docker ps -q --filter "name=openhands" | xargs -r docker stop 2>/dev/null || true
+  docker ps -q --filter "name=sweb" | xargs -r docker stop 2>/dev/null || true
+
+  # Remove all stopped containers
+  echo "Removing stopped containers..."
+  docker container prune -f 2>/dev/null || true
+
+  # Remove all OpenHands runtime images aggressively
+  echo "Removing OpenHands runtime images..."
+  docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "(ghcr.io/openhands/runtime|openhands-runtime)" | xargs -r docker rmi -f 2>/dev/null || true
+
+  # Remove dangling images
+  echo "Removing dangling images..."
+  docker image prune -f 2>/dev/null || true
+
+  # Remove unused volumes
+  echo "Removing unused volumes..."
+  docker volume prune -f 2>/dev/null || true
+
+  # Run full system prune
+  echo "Running full Docker system prune..."
+  docker system prune -f --volumes 2>/dev/null || true
+
+  # Re-check disk space
+  DISK_GB=$(check_disk_space)
+  echo "Available disk space after cleanup: ${DISK_GB}GB"
+
+  if [ "$DISK_GB" -lt "$MIN_DISK_GB" ]; then
+    echo "ERROR: Still not enough disk space after cleanup (${DISK_GB}GB < ${MIN_DISK_GB}GB)"
+    echo "Please free up disk space manually before running evaluation."
+    exit 1
+  fi
 fi
-echo "Using RUNTIME_CONTAINER_IMAGE: $RUNTIME_CONTAINER_IMAGE"
+
+# Check memory before proceeding
+MEM_GB=$(check_memory)
+echo "Available memory: ${MEM_GB}GB"
+
+# Minimum required memory: 4GB
+MIN_MEM_GB=4
+
+if [ "$MEM_GB" -lt "$MIN_MEM_GB" ]; then
+  echo "WARNING: Low memory (${MEM_GB}GB < ${MIN_MEM_GB}GB). Killing stale processes..."
+
+  # Kill any stale Python/OpenHands processes that might be hogging memory
+  pkill -f "run_infer" 2>/dev/null || true
+  pkill -f "openhands" 2>/dev/null || true
+
+  # Stop any running openhands containers
+  docker ps -q --filter "name=openhands" | xargs -r docker stop 2>/dev/null || true
+
+  # Re-check memory
+  sleep 2
+  MEM_GB=$(check_memory)
+  echo "Available memory after cleanup: ${MEM_GB}GB"
+fi
+
+# Always do a basic cleanup before each run to prevent accumulation
+echo "Running pre-run Docker cleanup..."
+docker container prune -f 2>/dev/null || true
+docker image prune -f 2>/dev/null || true
+
+# Clean up any leftover runtime images from previous runs
+echo "Cleaning up old OpenHands runtime images..."
+OLD_RUNTIME_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "ghcr.io/openhands/runtime" | head -10 || true)
+if [ -n "$OLD_RUNTIME_IMAGES" ]; then
+  echo "Found old runtime images, removing..."
+  echo "$OLD_RUNTIME_IMAGES" | xargs -r docker rmi -f 2>/dev/null || true
+  echo "✓ Old runtime images cleaned up"
+fi
+
+echo "✓ Pre-run checks complete"
+echo ""
 
 # ============================================
 # ARGUMENT PARSING
@@ -151,155 +255,58 @@ echo "Image URI: $IMAGE_URI"
 echo "Repo: $REPO"
 echo "Base Commit: $BASE_COMMIT"
 
-# Extract SWE-Lancer specific fields if available
-MONOLITH_IMAGE=$(cat "$DATASET_ABS" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('monolith_image', ''))
-" 2>/dev/null)
-
-TASK_SPECIFIC_IMAGE=$(cat "$DATASET_ABS" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('task_specific_image', ''))
-" 2>/dev/null)
-
-TEST_OUTPUT_PARSER=$(cat "$DATASET_ABS" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('test_output_parser', ''))
-" 2>/dev/null)
-
-# Detect if this is a SWE-Lancer task
-IS_SWELANCER=false
-if [[ "$REPO" == *"Expensify"* ]] || [[ "$TEST_OUTPUT_PARSER" == *"swelancer"* ]] || [[ "$TEST_OUTPUT_PARSER" == *"playwright"* ]] || [[ -n "$MONOLITH_IMAGE" ]]; then
-  IS_SWELANCER=true
-  echo ""
-  echo "============================================"
-  echo "DETECTED SWE-LANCER TASK"
-  echo "============================================"
-  echo "Monolith Image: $MONOLITH_IMAGE"
-  echo "Task Specific Image: $TASK_SPECIFIC_IMAGE"
-  echo "Test Output Parser: $TEST_OUTPUT_PARSER"
-  echo "USE_SWELANCER_MONOLITH: $USE_SWELANCER_MONOLITH"
-fi
-
-# Determine the Docker image to use
-if [ "$IS_SWELANCER" = true ]; then
-  if [ "$USE_SWELANCER_MONOLITH" = "true" ]; then
-    # Use monolith image for all SWE-Lancer tasks
-    DOCKER_IMAGE_TO_USE="$SWELANCER_MONOLITH_IMAGE"
-    echo "Using SWE-Lancer monolith image: $DOCKER_IMAGE_TO_USE"
-  elif [ -n "$TASK_SPECIFIC_IMAGE" ]; then
-    # Use task-specific image
-    DOCKER_IMAGE_TO_USE="$TASK_SPECIFIC_IMAGE"
-    echo "Using SWE-Lancer task-specific image: $DOCKER_IMAGE_TO_USE"
-  else
-    DOCKER_IMAGE_TO_USE="$IMAGE_URI"
-  fi
-else
-  DOCKER_IMAGE_TO_USE="$IMAGE_URI"
-fi
-
-# Construct S3 path - use the actual URI if it starts with s3://
-# This allows the dataset to specify the exact S3 path to use
+# Use image_storage_uri directly as S3 path (supports multiple S3 buckets)
 if [[ "$IMAGE_URI" == s3://* ]]; then
-  # IMAGE_URI is already a full S3 path (e.g., s3://bucket/path/file.tar)
+  # image_storage_uri is already a full S3 path
   S3_PATH="$IMAGE_URI"
-  S3_IMAGE_FILE=$(basename "$IMAGE_URI")
-  echo "Using S3 path from dataset: $S3_PATH"
-elif [[ "$IMAGE_URI" == docker://* ]]; then
-  # IMAGE_URI is a docker reference (e.g., docker://image:tag)
-  DOCKER_REF=$(echo "$IMAGE_URI" | sed 's|docker://||')
-  S3_IMAGE_FILE=""
-  S3_PATH=""
-  echo "Using Docker reference: $DOCKER_REF"
+  S3_IMAGE_FILE=$(basename "$S3_PATH")
+  echo "S3 Path (from image_storage_uri): $S3_PATH"
 else
-  # Legacy behavior: construct S3 path from image name
+  # Legacy format: construct S3 path from image_storage_uri parts
   REPO_PART=$(echo "$IMAGE_URI" | awk -F'/' '{print $NF}')
   REPO_NAME=$(echo "$REPO_PART" | cut -d':' -f1)
   COMMIT=$(echo "$REPO_PART" | cut -d':' -f2)
   S3_IMAGE_FILE="${REPO_NAME}-${COMMIT}.tar"
-  # Default S3 bucket - can be overridden by environment variable
-  S3_BUCKET="${S3_BUCKET:-kuberha-velora}"
-  S3_PREFIX="${S3_PREFIX:-velora-files/images}"
-  S3_PATH="s3://${S3_BUCKET}/${S3_PREFIX}/${S3_IMAGE_FILE}"
-  echo "Constructed S3 path: $S3_PATH"
+  S3_PATH="s3://kuberha-velora/velora-files/images/${S3_IMAGE_FILE}"
+  echo "S3 Path (constructed): $S3_PATH"
 fi
 
-echo "S3 Path: $S3_PATH"
 echo "Local file: ${S3_IMAGE_FILE}"
-
-# ============================================
-# VERIFY AWS CONFIGURATION (if S3 download needed)
-# ============================================
-if [[ "$IMAGE_URI" == s3://* ]] || [[ -z "$DOCKER_IMAGE_TO_USE" ]]; then
-  echo ""
-  echo "============================================"
-  echo "VERIFYING AWS CONFIGURATION"
-  echo "============================================"
-  
-  # Check if AWS CLI is available
-  if ! command -v aws &> /dev/null; then
-    echo "ERROR: AWS CLI is not installed"
-    echo "Please install AWS CLI: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
-    exit 1
-  fi
-  
-  # Check if AWS credentials are configured
-  if ! aws sts get-caller-identity &> /dev/null; then
-    echo "WARNING: AWS credentials may not be configured correctly"
-    echo "Please ensure ~/.aws/credentials and ~/.aws/config exist"
-    echo ""
-    echo "Expected configuration:"
-    echo "  ~/.aws/credentials:"
-    echo "    [default]"
-    echo "    aws_access_key_id = YOUR_ACCESS_KEY"
-    echo "    aws_secret_access_key = YOUR_SECRET_KEY"
-    echo ""
-    echo "  ~/.aws/config:"
-    echo "    [default]"
-    echo "    region = us-east-1"
-    echo ""
-    echo "Continuing anyway - S3 download may fail..."
-  else
-    echo "✓ AWS credentials configured"
-    aws sts get-caller-identity --query "Account" --output text 2>/dev/null | xargs -I {} echo "  Account: {}"
-  fi
-  
-  # Test S3 access if we have a specific path
-  if [[ "$IMAGE_URI" == s3://* ]]; then
-    S3_BUCKET_NAME=$(echo "$IMAGE_URI" | sed 's|s3://||' | cut -d'/' -f1)
-    echo "Testing access to S3 bucket: $S3_BUCKET_NAME"
-    if aws s3 ls "s3://$S3_BUCKET_NAME" --max-items 1 &> /dev/null; then
-      echo "✓ S3 bucket accessible: $S3_BUCKET_NAME"
-    else
-      echo "WARNING: Cannot access S3 bucket: $S3_BUCKET_NAME"
-      echo "S3 download may fail. Please verify bucket name and permissions."
-    fi
-  fi
-fi
 
 # ============================================
 # DOWNLOAD AND LOAD DOCKER IMAGE FROM S3
 # ============================================
 echo ""
 echo "============================================"
-echo "DOWNLOADING DOCKER IMAGE"
+echo "DOWNLOADING DOCKER IMAGE FROM S3"
 echo "============================================"
 
-# Construct expected image tags for checking
-EXPECTED_TAG1="mswebench/sweb.eval.x86_64.${INSTANCE_ID}:latest"
-EXPECTED_TAG2="mswebench/sweb.eval.x86_64.${INSTANCE_ID}"
+# Determine the expected Docker image name after loading
+# Determine the expected Docker image name after loading
+# For S3 paths, the image inside the tar is named velora/{instance_id}:base
+if [[ "$IMAGE_URI" == s3://* ]]; then
+  SOURCE_IMAGE="velora/${INSTANCE_ID}:base"
+  echo "Expected image after load: $SOURCE_IMAGE"
+else
+  SOURCE_IMAGE="$IMAGE_URI"
+  echo "Expected image: $SOURCE_IMAGE"
+fi
 
-# Check if image already exists by checking for the mswebench-tagged version
-if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "$EXPECTED_TAG1"; then
-  echo "✓ Docker image already loaded: $EXPECTED_TAG1"
-  # Set IMAGE_URI to the local image for subsequent steps
-  IMAGE_URI="$EXPECTED_TAG1"
-elif docker images --format "{{.Repository}}" | grep -q "$EXPECTED_TAG2"; then
-  echo "✓ Docker image already loaded: $EXPECTED_TAG2"
-  IMAGE_URI="$EXPECTED_TAG2:latest"
+# For S3 paths, the image inside the tar is named velora/{instance_id}:base
+if [[ "$IMAGE_URI" == s3://* ]]; then
+  # S3 path format - image inside tar is velora/{instance_id}:base
+  VELORA_IMAGE="velora/${INSTANCE_ID}:base"
+  SOURCE_IMAGE="$VELORA_IMAGE"
+  echo "Expected image after load: $VELORA_IMAGE"
+else
+  # Legacy format - IMAGE_URI is the actual docker image name
+  SOURCE_IMAGE="$IMAGE_URI"
+  echo "Expected image: $SOURCE_IMAGE"
+fi
+
+# Check if image already exists
+if docker images --format "{{.Repository}}:{{.Tag}}" | grep -qF "$SOURCE_IMAGE"; then
+  echo "✓ Docker image already loaded: $SOURCE_IMAGE"
 else
   echo "Downloading from S3..."
   aws s3 cp "$S3_PATH" "$S3_IMAGE_FILE"
@@ -308,105 +315,22 @@ else
     echo "ERROR: Failed to download Docker image from S3"
     exit 1
   fi
-  
+
+  echo "✓ Downloaded $(du -h "$S3_IMAGE_FILE" | cut -f1)"
+
   echo "Loading Docker image..."
-  docker load < "$local_file"
-  
+  docker load < "$S3_IMAGE_FILE"
+
   if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to load Docker image from: $local_file"
-    return 1
-  fi
-  
-  echo "✓ Image loaded successfully"
-  
-  # Keep the tar file for reuse (don't delete)
-  # This avoids re-downloading for subsequent evaluations
-  echo "✓ Keeping tar file for reuse: $local_file"
-  
-  return 0
-}
-
-# Handle SWE-Lancer images differently
-if [ "$IS_SWELANCER" = true ] && ([ "$USE_SWELANCER_MONOLITH" = "true" ] || [ -n "$TASK_SPECIFIC_IMAGE" ]); then
-  echo "SWE-Lancer mode: Checking if image exists..."
-  
-  # For SWE-Lancer, we pull from Docker Hub instead of S3
-  if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "$DOCKER_IMAGE_TO_USE"; then
-    echo "✓ SWE-Lancer Docker image already exists: $DOCKER_IMAGE_TO_USE"
-  else
-    echo "Pulling SWE-Lancer Docker image: $DOCKER_IMAGE_TO_USE"
-    docker pull --platform linux/amd64 "$DOCKER_IMAGE_TO_USE"
-    
-    if [ $? -ne 0 ]; then
-      echo "ERROR: Failed to pull SWE-Lancer Docker image"
-      echo "Falling back to S3 download..."
-      # Fall through to S3 download logic
-    else
-      echo "✓ SWE-Lancer image pulled successfully"
-    fi
-  fi
-  
-  # Set IMAGE_URI to the SWE-Lancer image for tagging
-  IMAGE_URI="$DOCKER_IMAGE_TO_USE"
-
-# Handle S3 path from dataset
-elif [[ "$IMAGE_URI" == s3://* ]]; then
-  echo "S3 mode: Downloading image from dataset-specified S3 path..."
-  
-  # Extract the expected image name after loading
-  # The image name is determined by what's inside the tar file
-  # We'll check after loading
-  
-  if [ -n "$S3_IMAGE_FILE" ] && [ -f "$S3_IMAGE_FILE" ]; then
-    echo "✓ Tar file already exists locally: $S3_IMAGE_FILE"
-    
-    # Check if image is already loaded
-    LOADED_IMAGE=$(docker load < "$S3_IMAGE_FILE" 2>&1 | grep -oP "Loaded image: \K.*" || true)
-    if [ -n "$LOADED_IMAGE" ]; then
-      echo "✓ Image loaded: $LOADED_IMAGE"
-      IMAGE_URI="$LOADED_IMAGE"
-    fi
-  else
-    download_and_load_from_s3 "$S3_PATH" "$S3_IMAGE_FILE"
-    if [ $? -ne 0 ]; then
-      exit 1
-    fi
-    
-    # Get the loaded image name
-    LOADED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | head -1)
-    if [ -n "$LOADED_IMAGE" ]; then
-      echo "✓ Detected loaded image: $LOADED_IMAGE"
-      IMAGE_URI="$LOADED_IMAGE"
-    fi
+    echo "ERROR: Failed to load Docker image"
+    exit 1
   fi
 
-# Handle docker:// reference
-elif [[ "$IMAGE_URI" == docker://* ]]; then
-  DOCKER_REF=$(echo "$IMAGE_URI" | sed 's|docker://||')
-  echo "Docker mode: Using docker reference $DOCKER_REF"
-  
-  if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "$DOCKER_REF"; then
-    echo "✓ Docker image already exists: $DOCKER_REF"
-  else
-    echo "Pulling Docker image: $DOCKER_REF"
-    docker pull --platform linux/amd64 "$DOCKER_REF"
-    if [ $? -ne 0 ]; then
-      echo "ERROR: Failed to pull Docker image: $DOCKER_REF"
-      exit 1
-    fi
-  fi
-  IMAGE_URI="$DOCKER_REF"
+  echo "✓ Image loaded"
 
-# Standard legacy S3 download
-else
-  if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "$IMAGE_URI"; then
-    echo "✓ Docker image already loaded: $IMAGE_URI"
-  else
-    download_and_load_from_s3 "$S3_PATH" "$S3_IMAGE_FILE"
-    if [ $? -ne 0 ]; then
-      exit 1
-    fi
-  fi
+  # Cleanup tar file
+  rm -f "$S3_IMAGE_FILE"
+  echo "✓ Cleaned up tar file"
 fi
 
 # ============================================
@@ -418,8 +342,7 @@ echo "TAGGING DOCKER IMAGE FOR OPENHANDS"
 echo "============================================"
 
 # Double tagging as per OpenHands requirements
-# IMPORTANT: Docker requires repository names to be lowercase
-REPO_M=$(echo "$REPO" | sed 's|/|_m_|g' | tr '[:upper:]' '[:lower:]')
+REPO_M=$(echo "$REPO" | sed 's|/|_m_|g')
 TAG1="mswebench/sweb.eval.x86_64.${INSTANCE_ID}:latest"
 TAG2="mswebench/${REPO_M}:pr-${INSTANCE_ID}"
 
@@ -427,14 +350,61 @@ echo "Original image: $IMAGE_URI"
 echo "Tag 1: $TAG1"
 echo "Tag 2: $TAG2"
 
+# Function to fix Docker image with tmux
+fix_docker_image_with_tmux() {
+  local SOURCE_IMAGE=$1
+  local TARGET_TAG=$2
+
+  echo "Fixing Docker image: installing tmux..."
+
+  # Create a temporary container
+  CONTAINER_ID=$(docker run -d --entrypoint /bin/bash "$SOURCE_IMAGE" -c "sleep 300")
+
+  # Fix apt sources and install tmux
+  docker exec "$CONTAINER_ID" bash -c '
+    # Fix apt sources for Ubuntu Jammy
+    cat > /etc/apt/sources.list << "EOF"
+deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
+EOF
+    # Clear proxy settings
+    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+    export http_proxy="" https_proxy=""
+    # Update and install tmux
+    apt-get update && apt-get install -y tmux
+  '
+
+  if [ $? -eq 0 ]; then
+    # Commit the fixed container as a new image
+    docker commit "$CONTAINER_ID" "$TARGET_TAG"
+    echo "✓ Fixed image committed as: $TARGET_TAG"
+  else
+    echo "WARNING: Failed to install tmux, continuing with original image"
+    docker tag "$SOURCE_IMAGE" "$TARGET_TAG"
+  fi
+
+  # Cleanup
+  docker stop "$CONTAINER_ID" >/dev/null 2>&1 || true
+  docker rm "$CONTAINER_ID" >/dev/null 2>&1 || true
+}
+
 # Check if TAG1 already exists and has tmux (fixed image)
 if docker run --rm --entrypoint /bin/bash "$TAG1" -c "which tmux" >/dev/null 2>&1; then
   echo "✓ Fixed image already exists with tmux - skipping re-tag"
 else
-  echo "Tagging image..."
-  docker tag "$IMAGE_URI" "$TAG1"
-  docker tag "$IMAGE_URI" "$TAG2"
-  echo "✓ Image tagged successfully"
+  # Check if the source image has tmux
+  if docker run --rm --entrypoint /bin/bash "$IMAGE_URI" -c "which tmux" >/dev/null 2>&1; then
+    echo "Source image has tmux, tagging directly..."
+    docker tag "$IMAGE_URI" "$TAG1"
+    docker tag "$IMAGE_URI" "$TAG2"
+    echo "✓ Image tagged successfully"
+  else
+    echo "Source image missing tmux - fixing..."
+    fix_docker_image_with_tmux "$IMAGE_URI" "$TAG1"
+    docker tag "$TAG1" "$TAG2"
+    echo "✓ Fixed image tagged successfully"
+  fi
 fi
 
 # Verify tags
@@ -443,50 +413,17 @@ echo "Verifying tags:"
 docker images | grep -E "(${INSTANCE_ID}|${REPO_M})" | head -5
 
 # ============================================
-# INSTALL TMUX IN BASE IMAGE (Critical Fix)
+# CLEAN UP OLD RUNTIME IMAGES (if any)
 # ============================================
 echo ""
-echo "============================================"
-echo "INSTALLING TMUX IN BASE IMAGE"
-echo "============================================"
-
-# Check if tmux is installed
-if docker run --rm --entrypoint /bin/bash "$TAG1" -c "which tmux" >/dev/null 2>&1; then
-  echo "✓ tmux already installed in image"
+echo "Cleaning up old OpenHands runtime images..."
+OLD_RUNTIME_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep "ghcr.io/openhands/runtime" | head -5 || true)
+if [ -n "$OLD_RUNTIME_IMAGES" ]; then
+  echo "Found old runtime images, removing..."
+  echo "$OLD_RUNTIME_IMAGES" | xargs -r docker rmi -f 2>/dev/null || true
+  echo "✓ Old runtime images cleaned up"
 else
-  echo "Installing tmux in base image..."
-  TMUX_CONTAINER="tmux_install_$$"
-
-  # Detect OS and install tmux using appropriate method
-  docker run --name "$TMUX_CONTAINER" --entrypoint /bin/bash "$TAG1" -c '
-    # Clear any proxy settings that might interfere
-    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
-
-    # Try to install tmux using existing repos (works for both Debian and Ubuntu)
-    if command -v apt-get &>/dev/null; then
-      apt-get update 2>/dev/null || true
-      apt-get install -y --no-install-recommends tmux 2>/dev/null && exit 0
-
-      # If that failed, try with --allow-unauthenticated (for GPG issues)
-      apt-get install -y --allow-unauthenticated tmux 2>/dev/null && exit 0
-    fi
-
-    # Fallback: check if tmux binary exists in common locations
-    [ -f /usr/bin/tmux ] && exit 0
-
-    exit 1
-  '
-
-  if [ $? -eq 0 ]; then
-    # Commit the container with tmux installed
-    docker commit "$TMUX_CONTAINER" "$TAG1"
-    docker tag "$TAG1" "$TAG2"  # Re-tag TAG2 as well
-    echo "✓ tmux installed and image updated"
-  else
-    echo "WARNING: tmux installation failed, continuing anyway"
-  fi
-
-  docker rm "$TMUX_CONTAINER" 2>/dev/null || true
+  echo "✓ No old runtime images to clean"
 fi
 
 # ============================================
@@ -513,39 +450,6 @@ fi
 echo "EVAL_NOTE: $EVAL_NOTE"
 
 # ============================================
-# CREATE MODIFIED DATASET (remove image_storage_uri)
-# ============================================
-echo ""
-echo "============================================"
-echo "CREATING MODIFIED DATASET"
-echo "============================================"
-
-# Create a temporary dataset with image_storage_uri removed
-# This forces run_infer.py to use the mswebench-prefixed image name
-# which triggers the correct Dockerfile.j2 branch with || true fallbacks
-MODIFIED_DATASET="/tmp/modified_dataset_${INSTANCE_ID}.jsonl"
-
-python3 << PYEOF
-import json
-
-with open("$DATASET_ABS", 'r') as f:
-    data = json.load(f)
-
-# Remove image_storage_uri so run_infer.py uses constructed image name
-if 'image_storage_uri' in data:
-    del data['image_storage_uri']
-    print("Removed image_storage_uri from dataset")
-
-# Write as JSONL (single line, no indentation) for load_dataset compatibility
-with open("$MODIFIED_DATASET", 'w') as f:
-    f.write(json.dumps(data) + '\n')
-
-print(f"Created modified dataset (JSONL): $MODIFIED_DATASET")
-PYEOF
-
-echo "Modified dataset: $MODIFIED_DATASET"
-
-# ============================================
 # PHASE 1: TRAJECTORY GENERATION
 # ============================================
 echo ""
@@ -556,21 +460,19 @@ echo "============================================"
 unset SANDBOX_ENV_GITHUB_TOKEN  # Prevent agent from using github token
 
 N_RUNS=${N_RUNS:-1}
-RUN_NUMBER_OFFSET=${RUN_NUMBER_OFFSET:-0}
 for i in $(seq 1 $N_RUNS); do
-  actual_run_number=$((i + RUN_NUMBER_OFFSET))
-  current_eval_note="${EVAL_NOTE}-run_${actual_run_number}"
+  current_eval_note="${EVAL_NOTE}-run_${i}"
   echo ""
   echo "Starting run $i with eval_note: $current_eval_note"
   echo ""
 
-  INFER_COMMAND="PYTHONPATH=\"$PWD:\$PYTHONPATH\" poetry run python evaluation/benchmarks/multi_swe_bench/run_infer.py \
+  INFER_COMMAND="poetry run python evaluation/benchmarks/multi_swe_bench/run_infer.py \
     --agent-cls $AGENT \
     --llm-config $MODEL_CONFIG \
     --max-iterations $MAX_ITER \
     --eval-num-workers $NUM_WORKERS \
     --eval-note $current_eval_note \
-    --dataset $MODIFIED_DATASET \
+    --dataset $DATASET_ABS \
     --split $SPLIT \
     --eval-n-limit $EVAL_LIMIT"
 
@@ -698,23 +600,8 @@ if [ ! -f "$EVAL_SCRIPT" ]; then
   exit 1
 fi
 
-# Determine Docker image for evaluation
-if [ "$IS_SWELANCER" = true ]; then
-  # For SWE-Lancer, use the appropriate image based on configuration
-  if [ "$USE_SWELANCER_MONOLITH" = "true" ]; then
-    DOCKER_IMAGE="$SWELANCER_MONOLITH_IMAGE"
-    echo "Using SWE-Lancer monolith image for evaluation: $DOCKER_IMAGE"
-  elif [ -n "$TASK_SPECIFIC_IMAGE" ]; then
-    DOCKER_IMAGE="$TASK_SPECIFIC_IMAGE"
-    echo "Using SWE-Lancer task-specific image for evaluation: $DOCKER_IMAGE"
-  else
-    DOCKER_IMAGE="$TAG1"
-  fi
-else
-  # Use the mswebench tagged image for standard tasks
-  DOCKER_IMAGE="$TAG1"
-fi
-
+# Use the mswebench tagged image
+DOCKER_IMAGE="$TAG1"
 echo "Docker image for evaluation: $DOCKER_IMAGE"
 echo "Evaluation script: $EVAL_SCRIPT"
 
@@ -722,7 +609,6 @@ echo "Evaluation script: $EVAL_SCRIPT"
 RUN_LOG="${OUTPUT_DIR}/eval_outputs/${INSTANCE_ID}/run_instance.log"
 mkdir -p "$(dirname "$RUN_LOG")"
 
-# Build evaluation command
 EVAL_COMMAND="python3 $EVAL_SCRIPT \
   --trajectory-file $OUTPUT_FILE \
   --dataset-file $DATASET_ABS \
@@ -730,16 +616,6 @@ EVAL_COMMAND="python3 $EVAL_SCRIPT \
   --output-file $EVAL_OUTPUT_FILE \
   --timeout 600"
 
-# Display SWE-Lancer specific configuration
-if [ "$IS_SWELANCER" = true ]; then
-  echo ""
-  echo "SWE-Lancer Evaluation Configuration:"
-  echo "  USE_SWELANCER_MONOLITH: $USE_SWELANCER_MONOLITH"
-  echo "  Base Commit: $BASE_COMMIT"
-  echo "  Test Output Parser: $TEST_OUTPUT_PARSER"
-fi
-
-echo ""
 echo "Running: $EVAL_COMMAND"
 echo ""
 
@@ -950,14 +826,8 @@ if [ -n "$TAG2" ]; then
 fi
 
 # Remove the original source image if it's different from TAG1/TAG2
-# IMPORTANT: Do NOT remove the base swelancer/unified or mswebench images - these are reused across runs!
 if [ -n "$IMAGE_URI" ] && [ "$IMAGE_URI" != "$TAG1" ] && [ "$IMAGE_URI" != "$TAG2" ]; then
-  # Skip removal if it's a base image we want to keep
-  if [[ "$IMAGE_URI" == *"swelancer/unified"* ]] || [[ "$IMAGE_URI" == *"mswebench/swelancer"* ]]; then
-    echo "  Keeping base image: $IMAGE_URI (reused across runs)"
-  else
-    docker rmi -f "$IMAGE_URI" 2>/dev/null && echo "✓ Removed: $IMAGE_URI" || echo "  (already removed or in use)"
-  fi
+  docker rmi -f "$IMAGE_URI" 2>/dev/null && echo "✓ Removed: $IMAGE_URI" || echo "  (already removed or in use)"
 fi
 
 # Clean up any OpenHands runtime images created during this run

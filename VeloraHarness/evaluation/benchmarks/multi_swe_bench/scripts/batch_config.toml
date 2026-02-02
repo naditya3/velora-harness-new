@@ -1,0 +1,144 @@
+# Velora Batch Evaluation Configuration
+# ======================================
+# This file configures the master batch evaluation script for running
+# pass@N trajectories across multiple LLM models and datasets.
+#
+# Usage:
+#   ./run_batch_master.sh --config batch_config.toml
+#
+# Before running, ensure:
+#   1. All instances are set up: ./setup_remote_hosts.sh --hosts "..." --ssh-key ...
+#   2. Datasets are in the configured directory
+#   3. API keys are configured in config.toml on all instances
+
+# ============================================
+# BATCH SETTINGS
+# ============================================
+[batch]
+# Number of trajectories per model per task (pass@N)
+pass_at_n = 8
+
+# Maximum agent iterations per trajectory
+max_iterations = 1000
+
+# Timeout per trajectory in seconds (default: 1 hour)
+timeout_per_trajectory = 3600
+
+# Number of retries for failed trajectories (0 = no retry)
+# If retry fails, the failure is logged for manual review
+retry_count = 1
+
+# Delay between retries in seconds
+retry_delay = 300
+
+# ============================================
+# LLM MODELS
+# ============================================
+[models]
+# List of model configs to use (must match [llm.XXX] sections in config.toml)
+# Each model will generate pass_at_n trajectories per task
+enabled = ["gpt_codex", "claude_codex", "gemini_codex"]
+
+# Model-specific overrides (optional)
+# [models.overrides.gpt_codex]
+# max_iterations = 500
+# timeout = 1800
+
+# ============================================
+# AWS INSTANCES
+# ============================================
+[instances]
+# Master instance IP (where outputs are collected)
+# Leave empty to use the current machine as master
+master = ""
+
+# List of worker instance IPs/hostnames
+# Each worker processes one complete task (all models, all pass@N runs)
+# If more tasks than workers, tasks are queued and assigned round-robin
+workers = []
+
+# SSH configuration
+ssh_key = "~/.ssh/velora.pem"
+ssh_user = "ubuntu"
+ssh_port = 22
+
+# Remote VeloraHarness path on worker instances
+remote_velora_path = "/home/ubuntu/Velora_SWE_Harness/VeloraHarness"
+
+# ============================================
+# DATASETS
+# ============================================
+[datasets]
+# Directory containing .jsonl dataset files
+# All .jsonl files in this directory will be processed
+directory = "data/"
+
+# OR specify explicit list of dataset files (overrides directory)
+# files = [
+#     "data/erusev__parsedown.pr_685.jsonl",
+#     "data/barryvdh__laravel-ide-helper.pr_1635.jsonl",
+# ]
+
+# ============================================
+# DOCKER CLEANUP
+# ============================================
+[cleanup]
+# Clean Docker after each task completes (recommended)
+docker_cleanup_after_task = true
+
+# Keep base images (from S3), only remove runtime images
+keep_base_images = true
+
+# Clean Docker if disk usage exceeds this percentage
+disk_usage_threshold = 85
+
+# Aggressive cleanup threshold (removes everything including base images)
+critical_disk_threshold = 95
+
+# ============================================
+# OUTPUT SETTINGS
+# ============================================
+[output]
+# Base directory for outputs (relative to VeloraHarness)
+base_dir = "evaluation/evaluation_outputs/batch_outputs"
+
+# Sync outputs to master after each trajectory completes
+sync_after_trajectory = false
+
+# Sync outputs to master after each model completes (all pass@N runs)
+sync_after_model = true
+
+# Sync outputs to master after task completes
+sync_after_task = true
+
+# ============================================
+# MONITORING
+# ============================================
+[monitoring]
+# Status check interval in seconds
+status_interval = 60
+
+# Log file location (on master)
+log_file = "/tmp/batch_master.log"
+
+# Status file location (on master)
+status_file = "/tmp/batch_status.json"
+
+# Send notification on completion (requires configured notification service)
+notify_on_completion = false
+
+# ============================================
+# ADVANCED
+# ============================================
+[advanced]
+# Maximum parallel workers per instance (not recommended > 1 due to resource constraints)
+max_parallel_per_instance = 1
+
+# Skip tasks that already have complete outputs
+skip_completed = true
+
+# Resume from last known state if script was interrupted
+resume_enabled = true
+
+# State file for resume functionality
+state_file = "/tmp/batch_state.json"
