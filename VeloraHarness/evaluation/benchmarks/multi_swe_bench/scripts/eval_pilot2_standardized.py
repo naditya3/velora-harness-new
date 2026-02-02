@@ -13,6 +13,29 @@ Key requirements from client README:
 3. Execute tests with test_command from CSV
 4. Parse output with test_output_parser from CSV
 
+=== SWE-LANCER CRITICAL FIXES (applied in this script) ===
+
+1. Issue ID Extraction: Extracts issue_id from test_command using 
+   ISSUE_ID=<value> pattern (e.g., "18207_923") instead of regex that 
+   doesn't handle underscores.
+
+2. Patch Application Order: Model patch is applied AFTER git checkout 
+   of base_commit. If applied before, git checkout discards the patch.
+
+3. Proxy Configuration: Tests are rewritten using rewrite_test.py to 
+   inject Playwright proxy configuration (proxy={"server": "http://localhost:8080"})
+   so browser traffic goes through mitmdump.
+
+4. API Routing: USE_WEB_PROXY=false is set when starting webpack dev server
+   so API calls go directly to www.expensify.com through the browser's 
+   proxy (mitmdump) instead of through webpack's internal proxy.
+
+5. Exit Code Handling: Returns 0 if evaluation completed (test may have
+   passed or failed). Only returns 1 for actual evaluation errors.
+
+6. Node Version Switching: Automatically selects correct Node.js version
+   based on base_commit and copies pre-cached node_modules.
+
 Usage:
     python eval_pilot2_standardized.py \
         --trajectory-file <output.jsonl> \
@@ -125,11 +148,93 @@ def parse_log_unittest(log: str, grading_spec: Any = None) -> Dict[str, str]:
     return test_status_map
 
 
+def parse_log_swelancer_exitcode(log: str, grading_spec: Any = None) -> Dict[str, str]:
+    """
+    Parser for SWE-Lancer that uses pytest exit code for grading.
+    
+    SWE-Lancer grading is based on pytest exit code:
+    - Exit code 0 = PASS
+    - Exit code 1 = FAIL (test failures)
+    - Exit code >= 2 = ERROR (collection/execution errors)
+    
+    The log should contain the pytest exit code from:
+    /app/tests/logs/<ISSUE_ID>/pytest_exit_code
+    """
+    test_status_map = {}
+    
+    # Look for exit code patterns
+    exit_code = None
+    
+    # Pattern 1: pytest_exit_code file content or variable
+    match = re.search(r'pytest_exit_code[:\s=]+(\d+)', log, re.IGNORECASE)
+    if match:
+        exit_code = int(match.group(1))
+    
+    # Pattern 2: "exit code:" or "Exit code:" pattern
+    if exit_code is None:
+        match = re.search(r'exit\s+code[:\s]+(\d+)', log, re.IGNORECASE)
+        if match:
+            exit_code = int(match.group(1))
+    
+    # Pattern 3: Check pytest summary for pass/fail counts
+    if exit_code is None:
+        if re.search(r'\d+\s+passed', log) and not re.search(r'\d+\s+failed', log):
+            exit_code = 0
+        elif re.search(r'\d+\s+failed', log) or re.search(r'\d+\s+error', log):
+            exit_code = 1
+    
+    # Find test names in log - match both "tests/" and "issues/" paths
+    # Pattern: issues/18207_923/test.py::test_duplicate_contact_methods
+    test_names = re.findall(r'(issues/[\w_]+/test\.py::[\w_]+)', log)
+    if not test_names:
+        # Try shorter path pattern
+        test_names = re.findall(r'tests/[\w_]+/test\.py::(test_\w+)', log)
+    if not test_names:
+        test_names = re.findall(r'(test_expensify_\d+)', log)
+    if not test_names:
+        test_names = ['test_expensify_0000']  # Default for SWE-Lancer
+    
+    # Grade based on exit code
+    if exit_code is not None:
+        if exit_code == 0:
+            for name in set(test_names):
+                test_status_map[name] = TestStatus.PASSED
+        elif exit_code == 1:
+            for name in set(test_names):
+                test_status_map[name] = TestStatus.FAILED
+        else:
+            for name in set(test_names):
+                test_status_map[name] = TestStatus.ERROR
+    else:
+        # Fallback: if we can't determine exit code, check for explicit PASSED/FAILED
+        for name in set(test_names):
+            if 'PASSED' in log or 'passed' in log.lower():
+                test_status_map[name] = TestStatus.PASSED
+            else:
+                test_status_map[name] = TestStatus.FAILED
+    
+    return test_status_map
+
+
+def parse_log_playwright(log: str, grading_spec: Any = None) -> Dict[str, str]:
+    """
+    Parser for SWE-Lancer Playwright tests run via pytest.
+    
+    SWE-Lancer uses Python tests with Playwright for browser automation.
+    These tests are run via pytest and grading is based on exit code.
+    """
+    return parse_log_swelancer_exitcode(log, grading_spec)
+
+
 # Parser registry mapping parser names to functions
 PARSER_REGISTRY: Dict[str, Callable] = {
     "python/parse_log_pytest_v3": parse_log_pytest_v3,
     "python/parse_log_pytest": parse_log_pytest_v3,  # Alias
     "python/parse_log_unittest": parse_log_unittest,
+    # SWE-Lancer parsers
+    "javascript/parse_log_playwright": parse_log_playwright,
+    "swelancer/parse_log_playwright": parse_log_playwright,
+    "swelancer/parse_log_exitcode": parse_log_swelancer_exitcode,
 }
 
 
@@ -166,6 +271,45 @@ class EvalReport:
 
 
 # ============================================================
+# SWE-LANCER CONFIGURATION
+# ============================================================
+
+# Environment variables for SWE-Lancer monolith mode
+USE_SWELANCER_MONOLITH = os.environ.get('USE_SWELANCER_MONOLITH', 'true').lower() == 'true'
+SWELANCER_MONOLITH_IMAGE = os.environ.get('SWELANCER_MONOLITH_IMAGE', 'swelancer/unified:latest')
+
+
+def is_swelancer_task(dataset: Dict[str, Any]) -> bool:
+    """Check if this is a SWE-Lancer task based on dataset fields."""
+    # Check for SWE-Lancer specific indicators
+    repo = dataset.get('repo', '')
+    test_parser = dataset.get('test_output_parser', '')
+    monolith_image = dataset.get('monolith_image', '')
+    
+    return (
+        'Expensify' in repo or
+        'swelancer' in test_parser.lower() or
+        'playwright' in test_parser.lower() or
+        'swelancer' in monolith_image.lower()
+    )
+
+
+def get_swelancer_docker_image(dataset: Dict[str, Any]) -> str:
+    """Get the Docker image for SWE-Lancer task."""
+    # Priority: monolith mode > task_specific_image > image_storage_uri
+    if USE_SWELANCER_MONOLITH:
+        logger.info(f"Using SWE-Lancer monolith image: {SWELANCER_MONOLITH_IMAGE}")
+        return SWELANCER_MONOLITH_IMAGE
+    
+    task_image = dataset.get('task_specific_image', '')
+    if task_image:
+        logger.info(f"Using task_specific_image: {task_image}")
+        return task_image
+    
+    return dataset.get('image_storage_uri', '')
+
+
+# ============================================================
 # DOCKER OPERATIONS
 # ============================================================
 
@@ -185,7 +329,7 @@ def run_docker_command(container_name: str, command: str, timeout: int = 300) ->
         return -1, "", str(e)
 
 
-def start_container(docker_image: str, container_name: str) -> bool:
+def start_container(docker_image: str, container_name: str, platform: str = "linux/amd64") -> bool:
     """Start a Docker container."""
     try:
         subprocess.run(
@@ -198,7 +342,8 @@ def start_container(docker_image: str, container_name: str) -> bool:
     
     try:
         result = subprocess.run(
-            ["docker", "run", "-d", "--name", container_name, 
+            ["docker", "run", "-d", "--name", container_name,
+             "--platform", platform,
              "--entrypoint", "/bin/bash", docker_image, "-c", "sleep 3600"],
             capture_output=True,
             text=True,
@@ -207,6 +352,55 @@ def start_container(docker_image: str, container_name: str) -> bool:
         return result.returncode == 0
     except Exception as e:
         logger.error(f"Failed to start container: {e}")
+        return False
+
+
+def start_swelancer_container(docker_image: str, container_name: str, platform: str = "linux/amd64") -> bool:
+    """Start a SWE-Lancer Docker container.
+    
+    For monolith images, we just start with sleep command.
+    The base_commit checkout and test execution will be handled separately.
+    """
+    try:
+        subprocess.run(
+            ["docker", "rm", "-f", container_name],
+            capture_output=True,
+            timeout=30
+        )
+    except:
+        pass
+    
+    try:
+        # For SWE-Lancer, start container with sleep command
+        # The setup (base commit checkout, test execution) happens in run_swelancer_tests
+        result = subprocess.run(
+            ["docker", "run", "-d", "--name", container_name,
+             "--platform", platform,
+             "--entrypoint", "/bin/bash",
+             docker_image, "-c", "sleep 7200"],  # 2 hour timeout
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Failed to start SWE-Lancer container: {result.stderr}")
+            return False
+        
+        # Give container a moment to start
+        time.sleep(2)
+        
+        # Verify container is running
+        returncode, stdout, _ = run_docker_command(container_name, "echo 'ready'")
+        if returncode == 0 and 'ready' in stdout:
+            logger.info("SWE-Lancer container started successfully")
+            return True
+        else:
+            logger.warning("SWE-Lancer container may not be ready, proceeding anyway")
+            return True
+        
+    except Exception as e:
+        logger.error(f"Failed to start SWE-Lancer container: {e}")
         return False
 
 
@@ -292,18 +486,399 @@ def extract_model_patch(trajectory: Dict[str, Any]) -> str:
 
 
 # ============================================================
+# SWE-LANCER TEST EXECUTION
+# ============================================================
+
+def run_swelancer_tests(
+    container_name: str, 
+    instance: Dict[str, Any], 
+    base_commit: str,
+    model_patch: str = None,
+    timeout: int = 900
+) -> tuple:
+    """
+    Run SWE-Lancer tests using the official ansible-playbook method.
+    
+    SWE-Lancer test execution:
+    1. Set up test environment (Xvfb, dev server, mitmdump, SSL certs)
+    2. Checkout base_commit (if using monolith)
+    3. Apply model patch (MUST be after checkout!)
+    4. Run ansible-playbook to execute tests
+    5. Read pytest exit code for grading
+    
+    Returns: (returncode, stdout, stderr)
+    """
+    instance_id = instance.get('instance_id', '')
+    # Extract issue_id from instance_id if it contains underscores or is a timestamp
+    issue_id = instance_id
+    if '_' in str(instance_id):
+        # Format: issue_num_X or similar
+        parts = str(instance_id).split('_')
+        issue_id = parts[0]
+    elif len(str(instance_id)) > 10:
+        # It's a generated timestamp ID - try to get from test_command or FAIL_TO_PASS
+        # First try to extract from test_command (most reliable)
+        test_cmd = instance.get('test_command', '')
+        if test_cmd:
+            import re
+            # Match ISSUE_ID=<value> pattern in test_command
+            match = re.search(r'ISSUE_ID=([0-9_]+)', str(test_cmd))
+            if match:
+                issue_id = match.group(1)
+                logger.info(f"Extracted issue_id from test_command: {issue_id}")
+        
+        # Fallback to FAIL_TO_PASS if test_command didn't work
+        if issue_id == instance_id:
+            f2p = instance.get('FAIL_TO_PASS', [])
+            if f2p:
+                # Extract issue number from test path like "issues/15925/test.py" or "issues/18207_923/test.py"
+                import re
+                match = re.search(r'issues/([0-9_]+)/', str(f2p))
+                if match:
+                    issue_id = match.group(1)
+                    logger.info(f"Extracted issue_id from FAIL_TO_PASS: {issue_id}")
+    
+    repo_path = instance.get('repo_path', '/app/expensify')
+    
+    # Step 1: Set up the test environment
+    logger.info(f"Setting up SWE-Lancer test environment for issue {issue_id}...")
+    
+    # CRITICAL: Add /etc/hosts entry for dev.new.expensify.com
+    # The test connects to https://dev.new.expensify.com:8082 through the proxy
+    hosts_cmd = (
+        "grep -q 'dev.new.expensify.com' /etc/hosts || "
+        "echo '127.0.0.1 dev.new.expensify.com' >> /etc/hosts"
+    )
+    run_docker_command(container_name, hosts_cmd, timeout=30)
+    
+    # Set up SSL certificates using mkcert
+    setup_commands = [
+        # Install mkcert CA
+        "mkcert -install 2>/dev/null || true",
+        # Generate certificates
+        "cd /app/expensify/config/webpack && mkcert -key-file key.pem -cert-file certificate.pem localhost 127.0.0.1 dev.new.expensify.com 2>/dev/null || true",
+        # Start Xvfb
+        "pkill -9 Xvfb 2>/dev/null || true",
+        "Xvfb :99 -screen 0 1920x1080x24 &",
+        "export DISPLAY=:99",
+        # Start fluxbox
+        "fluxbox &>/dev/null &",
+    ]
+    
+    for cmd in setup_commands:
+        run_docker_command(container_name, cmd, timeout=60)
+    
+    # Wait for Xvfb to start
+    time.sleep(2)
+    
+    # If using monolith, checkout the base_commit
+    if base_commit:
+        logger.info(f"Checking out base commit {base_commit[:12]}...")
+        returncode, stdout, stderr = run_docker_command(
+            container_name,
+            f"cd {repo_path} && git fetch origin 2>/dev/null || true && "
+            f"git checkout {base_commit} 2>&1 && "
+            f"git reset --hard {base_commit} 2>&1",
+            timeout=300
+        )
+        if returncode != 0:
+            logger.warning(f"Base commit checkout may have issues: {stderr}")
+        else:
+            logger.info(f"Successfully checked out {base_commit[:12]}")
+    
+    # ============================================================
+    # APPLY MODEL PATCH (must be after checkout!)
+    # ============================================================
+    if model_patch:
+        logger.info("Applying model patch to SWE-Lancer repo...")
+        returncode, stdout, stderr = run_docker_command(
+            container_name,
+            f"cd {repo_path} && git apply -v /tmp/model.patch 2>&1 || "
+            f"git apply --reject --whitespace=fix /tmp/model.patch 2>&1 || "
+            "patch --batch --fuzz=5 -p1 -i /tmp/model.patch 2>&1 || true"
+        )
+        logger.info(f"Model patch apply result: returncode={returncode}")
+        if returncode != 0:
+            logger.warning(f"Model patch apply may have issues: {stdout}")
+    
+    # ============================================================
+    # DYNAMIC NODE VERSION SWITCHING
+    # Based on base_commit, select the correct Node.js version and
+    # copy the pre-cached node_modules
+    # ============================================================
+    
+    # Map base_commit to Node.js version
+    # These mappings are based on the package.json engines field for each commit
+    NODE_VERSION_MAP = {
+        "2b791c9f3053": "20.15.1",  # new.expensify 9.0.41-1
+        "da2e6688c3f1": "20.18.0",  # new.expensify 9.0.54-8
+        "006a1dfe67a7": "20.18.0",  # new.expensify 9.0.77-6
+    }
+    
+    # Determine Node version from base_commit
+    node_version = None
+    if base_commit:
+        commit_prefix = base_commit[:12]
+        for commit_key, version in NODE_VERSION_MAP.items():
+            if commit_key.startswith(commit_prefix) or commit_prefix.startswith(commit_key[:12]):
+                node_version = version
+                break
+    
+    if node_version:
+        logger.info(f"Setting up Node.js {node_version} for commit {base_commit[:12]}...")
+        
+        # Switch to the correct Node version using nvm
+        switch_node_cmd = f"source ~/.nvm/nvm.sh && nvm use {node_version} && node --version"
+        returncode, stdout, stderr = run_docker_command(container_name, switch_node_cmd, timeout=30)
+        logger.info(f"Node version switch: {stdout.strip()}")
+        
+        # Copy cached node_modules if available
+        cache_dir = f"/app/node_cache/{node_version}/node_modules"
+        target_dir = f"{repo_path}/node_modules"
+        
+        # Check if cached node_modules exists
+        _, cache_check, _ = run_docker_command(
+            container_name,
+            f"ls -d {cache_dir} 2>/dev/null && echo 'CACHE_EXISTS' || echo 'NO_CACHE'"
+        )
+        
+        # First check for commit-specific cache
+        commit_cache_dir = f"/app/node_cache/commits/{base_commit[:12]}_node_modules"
+        _, commit_cache_check, _ = run_docker_command(
+            container_name,
+            f"ls -d {commit_cache_dir} 2>/dev/null && echo 'COMMIT_CACHE_EXISTS' || echo 'NO_COMMIT_CACHE'"
+        )
+        
+        if "COMMIT_CACHE_EXISTS" in commit_cache_check:
+            logger.info(f"Using commit-specific node_modules from {commit_cache_dir}...")
+            copy_cmd = (
+                f"rm -rf {target_dir} && "
+                f"cp -r {commit_cache_dir} {target_dir} && "
+                f"ls -1 {target_dir} 2>/dev/null | wc -l"
+            )
+            returncode, stdout, stderr = run_docker_command(container_name, copy_cmd, timeout=300)
+            package_count = stdout.strip().split('\n')[-1] if stdout else "unknown"
+            logger.info(f"Commit-specific node_modules copied: {package_count} packages")
+        elif "CACHE_EXISTS" in cache_check:
+            # Fallback: Copy generic cache then run npm ci to fix symlinks/local deps
+            logger.info(f"Using generic cache + npm ci for correct dependencies...")
+            copy_cmd = (
+                f"rm -rf {target_dir} && "
+                f"if command -v rsync &> /dev/null; then "
+                f"  rsync -a {cache_dir}/ {target_dir}/; "
+                f"else "
+                f"  cp -r {cache_dir} {target_dir}; "
+                f"fi"
+            )
+            run_docker_command(container_name, copy_cmd, timeout=300)
+            
+            # CRITICAL: Run npm ci to fix local dependencies and symlinks
+            # This is faster than full npm ci since packages are already present
+            logger.info("Running npm ci to fix local dependencies...")
+            npm_ci_cmd = (
+                f"cd {repo_path} && source ~/.nvm/nvm.sh && nvm use {node_version} && "
+                f"npm ci 2>&1 | tail -10"
+            )
+            returncode, stdout, stderr = run_docker_command(container_name, npm_ci_cmd, timeout=300)
+            logger.info(f"npm ci result: {stdout.strip()}")
+        else:
+            logger.warning(f"No cached node_modules for Node {node_version}, npm ci will be needed")
+            # Run full npm ci
+            logger.info("Running full npm ci (this may take 2-3 minutes)...")
+            npm_ci_cmd = (
+                f"cd {repo_path} && source ~/.nvm/nvm.sh && nvm use {node_version} && "
+                f"npm ci 2>&1 | tail -15"
+            )
+            returncode, stdout, stderr = run_docker_command(container_name, npm_ci_cmd, timeout=600)
+            logger.info(f"npm ci result: {stdout.strip()}")
+    else:
+        logger.warning(f"Unknown base_commit {base_commit}, using default Node version")
+    
+    # Start mitmdump for the specific issue
+    # The proxy intercepts requests and replays recorded network traffic
+    logger.info(f"Starting mitmdump for issue {issue_id}...")
+    
+    # Check if addon file exists
+    _, addon_check, _ = run_docker_command(
+        container_name,
+        f"ls -la /app/tests/addons/issues/{issue_id}/addon.py 2>/dev/null || echo 'ADDON NOT FOUND'"
+    )
+    if "ADDON NOT FOUND" in addon_check:
+        # Use replay.py as fallback
+        logger.warning(f"No addon.py found for issue {issue_id}, using replay.py")
+        mitm_cmd = (
+            f"export ISSUE_ID={issue_id} && "
+            f"cd /app/tests && "
+            f"mitmdump -s replay.py --listen-port 8080 --ssl-insecure "
+            f"--set confdir=/root/.mitmproxy >/tmp/mitmdump.log 2>&1 &"
+        )
+    else:
+        mitm_cmd = (
+            f"export ISSUE_ID={issue_id} && "
+            f"cd /app/tests && "
+            f"mitmdump -s addons/issues/{issue_id}/addon.py --listen-port 8080 --ssl-insecure "
+            f"--set confdir=/root/.mitmproxy >/tmp/mitmdump.log 2>&1 &"
+        )
+    
+    run_docker_command(container_name, mitm_cmd, timeout=30)
+    time.sleep(5)  # Give mitmdump more time to start
+    
+    # Verify mitmdump is running on port 8080
+    _, mitm_check, _ = run_docker_command(
+        container_name,
+        "netstat -tlnp 2>/dev/null | grep 8080 || ss -tlnp | grep 8080 || echo 'Mitmdump port 8080 not listening'"
+    )
+    logger.info(f"Mitmdump port check: {mitm_check.strip()}")
+    
+    # Start dev server on port 8082 (required by tests)
+    # The test expects https://dev.new.expensify.com:8082/
+    logger.info("Starting webpack dev server on port 8082...")
+    
+    # Check if node_modules exists (required for dev server)
+    _, node_modules_check, _ = run_docker_command(
+        container_name,
+        f"ls -d {repo_path}/node_modules 2>/dev/null && echo 'EXISTS' || echo 'MISSING'"
+    )
+    
+    if "MISSING" in node_modules_check:
+        logger.warning("node_modules is missing after cache copy! Running npm ci...")
+        nvm_use = f"nvm use {node_version} && " if node_version else ""
+        returncode, stdout, stderr = run_docker_command(
+            container_name,
+            f"cd {repo_path} && source ~/.nvm/nvm.sh && {nvm_use}npm ci 2>&1 | tail -20",
+            timeout=600
+        )
+        if returncode != 0 or "npm error" in stdout:
+            logger.error(f"npm ci failed: {stdout}")
+        else:
+            logger.info(f"npm ci completed: {stdout.strip().split(chr(10))[-1]}")
+    else:
+        logger.info(f"node_modules found: {node_modules_check.strip()}")
+    
+    # Source nvm with correct version and start dev server
+    # CRITICAL: Set USE_WEB_PROXY=false so API calls go directly to www.expensify.com
+    # through the browser's proxy (mitmdump), instead of through webpack's internal proxy
+    nvm_use = f"nvm use {node_version} && " if node_version else ""
+    dev_server_cmd = (
+        f"cd {repo_path} && "
+        f"export USE_WEB_PROXY=false && "
+        f"source ~/.nvm/nvm.sh && {nvm_use}"
+        f"npm run web >/tmp/devserver.log 2>&1 &"
+    )
+    run_docker_command(container_name, dev_server_cmd, timeout=30)
+    
+    # Wait for dev server to start (webpack compilation takes time)
+    logger.info("Waiting for dev server to be ready (60s for webpack compilation)...")
+    time.sleep(60)
+    
+    # Verify dev server is running on port 8082
+    _, port_check, _ = run_docker_command(
+        container_name,
+        "netstat -tlnp 2>/dev/null | grep 8082 || ss -tlnp | grep 8082 || echo 'Port 8082 not listening'"
+    )
+    logger.info(f"Dev server port check: {port_check.strip()}")
+    
+    if "not listening" in port_check:
+        # Check dev server log for errors
+        _, devlog, _ = run_docker_command(container_name, "tail -30 /tmp/devserver.log 2>/dev/null || echo 'No log'")
+        logger.error(f"Dev server failed to start. Log: {devlog}")
+    
+    # Create logs directory for this instance
+    run_docker_command(
+        container_name,
+        f"mkdir -p /app/tests/logs/{issue_id}"
+    )
+    
+    # ============================================================
+    # CRITICAL: Rewrite test file to inject proxy configuration
+    # This makes Playwright browser route traffic through mitmdump
+    # Without this, browser goes directly to internet, bypassing our replay proxy
+    # ============================================================
+    logger.info(f"Rewriting test file to inject proxy configuration...")
+    
+    # First ensure libcst is installed (required by rewrite_test.py)
+    run_docker_command(
+        container_name,
+        "pip3 install libcst --quiet 2>/dev/null || pip install libcst --quiet 2>/dev/null || true",
+        timeout=120
+    )
+    
+    rewrite_cmd = (
+        f"cd /app/tests && "
+        f"python3 rewrite_test.py issues/{issue_id}/test.py 2>&1"
+    )
+    rewrite_returncode, rewrite_stdout, rewrite_stderr = run_docker_command(
+        container_name, rewrite_cmd, timeout=60
+    )
+    if rewrite_returncode != 0:
+        logger.warning(f"Test rewrite may have issues: {rewrite_stdout} {rewrite_stderr}")
+    else:
+        logger.info("Test file rewritten successfully with proxy configuration")
+    
+    # Run tests using pytest directly (more reliable than ansible-playbook)
+    logger.info(f"Running SWE-Lancer tests for issue {issue_id}...")
+    
+    # CRITICAL FIX: Use PIPESTATUS to capture pytest's exit code, not tee's
+    # The previous code used `$?` which captures tee's exit code (always 0)
+    # PIPESTATUS[0] captures the exit code of the first command in the pipeline (pytest)
+    test_command = (
+        f'export DISPLAY=:99 && '
+        f'export ISSUE_ID={issue_id} && '
+        f'cd /app/tests && '
+        f'set -o pipefail && '  # Make pipeline return first non-zero exit code
+        f'pytest issues/{issue_id}/test.py -v --tb=short 2>&1 | tee /app/tests/logs/{issue_id}/pytest.log; '
+        f'echo ${{PIPESTATUS[0]}} > /app/tests/logs/{issue_id}/pytest_exit_code'
+    )
+    
+    returncode, stdout, stderr = run_docker_command(
+        container_name,
+        test_command,
+        timeout=timeout
+    )
+    
+    test_output = stdout + stderr
+    
+    # Get pytest exit code (official grading method)
+    _, exit_code_str, _ = run_docker_command(
+        container_name,
+        f"cat /app/tests/logs/{issue_id}/pytest_exit_code 2>/dev/null || echo '-1'"
+    )
+    
+    # Get pytest log
+    _, pytest_log, _ = run_docker_command(
+        container_name,
+        f"cat /app/tests/logs/{issue_id}/pytest.log 2>/dev/null || echo 'No pytest log'"
+    )
+    
+    # Combine all output with exit code for parser
+    full_output = (
+        f"=== TEST OUTPUT ===\n{test_output}\n\n"
+        f"=== PYTEST LOG ===\n{pytest_log}\n\n"
+        f"=== PYTEST EXIT CODE ===\n{exit_code_str.strip()}\n"
+        f"pytest_exit_code: {exit_code_str.strip()}"
+    )
+    
+    try:
+        pytest_exit = int(exit_code_str.strip().split('\n')[-1])
+    except (ValueError, IndexError):
+        pytest_exit = -1
+    
+    logger.info(f"SWE-Lancer test execution complete. pytest_exit_code={pytest_exit}")
+    
+    return pytest_exit, full_output, ""
+
+
+# ============================================================
 # EVAL SCRIPT GENERATION (following test_spec.py:make_eval_test_spec)
 # ============================================================
 
 def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int = 900) -> tuple:
     """
     Run the test command from the dataset, following client's test_spec.py flow.
-
+    
     Returns: (returncode, stdout, stderr)
     """
-    # Use /testbed for mswebench images (standard SWE-bench location)
-    # Fallback to /app/repo for older OpenHands images
-    repo_directory = "/testbed"
+    repo_directory = "/app/repo"
     test_patch_raw = instance.get("test_patch", "")
     test_command = instance.get("test_command", "pytest")
     
@@ -365,11 +940,9 @@ def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int
         parts = test_command.split("&&")
         test_exec = parts[-1].strip()  # Get the actual test command (pytest, etc.)
     
-    # Build a clean command: activate conda environment, unset proxies, then run tests
-    # Always source conda.sh and activate testbed for mswebench images
-    # The || true ensures we continue even if old /saved/ENV doesn't exist
+    # Build a clean command: source ENV, unset proxies, then run tests
     full_command = (
-        f"source /opt/miniconda3/etc/profile.d/conda.sh && conda activate testbed; "
+        f"source /saved/ENV 2>/dev/null || source /saved/*/ENV 2>/dev/null || true; "
         f"{unset_proxy}"
         f"cd {repo_directory} && {test_exec}"
     )
@@ -638,9 +1211,36 @@ def evaluate_instance(
         logger.info(f"Test command: {test_command[:80]}...")
         logger.info(f"Parser: {test_output_parser}")
         
-        # Step 3: Start Docker container
+        # Check if this is a SWE-Lancer task
+        is_swelancer = is_swelancer_task(dataset)
+        if is_swelancer:
+            logger.info("Detected SWE-Lancer task - using SWE-Lancer evaluation flow")
+        
+        # Get the appropriate Docker image for SWE-Lancer
+        # Only use dataset image if command-line docker_image looks like an S3 path or is empty
+        if is_swelancer:
+            # If docker_image from CLI is a valid local image, use it
+            if docker_image and not docker_image.startswith('s3://') and '/' in docker_image:
+                logger.info(f"Using CLI-provided Docker image: {docker_image}")
+            else:
+                swelancer_image = get_swelancer_docker_image(dataset)
+                # Only use dataset image if it's not an S3 path
+                if swelancer_image and not swelancer_image.startswith('s3://'):
+                    docker_image = swelancer_image
+                    logger.info(f"Using SWE-Lancer Docker image from dataset: {docker_image}")
+                else:
+                    # Dataset has S3 path, use the unified image
+                    docker_image = "swelancer/unified:latest"
+                    logger.info(f"Dataset has S3 path, using local unified image: {docker_image}")
+        
+        # Step 3: Start Docker container (SWE-Lancer or standard)
         logger.info(f"Starting container from {docker_image}")
-        if not start_container(docker_image, container_name):
+        if is_swelancer:
+            container_started = start_swelancer_container(docker_image, container_name)
+        else:
+            container_started = start_container(docker_image, container_name)
+        
+        if not container_started:
             return EvalReport(
                 instance_id=instance_id,
                 resolved=False,
@@ -659,64 +1259,99 @@ def evaluate_instance(
                 error_message="Failed to start container"
             )
         
-        # Step 4: Apply model patch
-        if model_patch:
-            logger.info("Applying model patch...")
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.diff', delete=False) as f:
-                f.write(model_patch)
-                patch_file = f.name
+        # SWE-LANCER EVALUATION FLOW
+        if is_swelancer:
+            base_commit = dataset.get('base_commit', '')
+            repo_path = dataset.get('repo_path', '/app/expensify')
             
-            subprocess.run(
-                ["docker", "cp", patch_file, f"{container_name}:/tmp/model.patch"],
-                capture_output=True, timeout=30
+            # IMPORTANT: Copy model patch to container first, but DON'T apply it yet
+            # The patch must be applied AFTER git checkout in run_swelancer_tests
+            if model_patch:
+                logger.info("Copying model patch to container (will apply after checkout)...")
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.diff', delete=False) as f:
+                    f.write(model_patch)
+                    patch_file = f.name
+                
+                subprocess.run(
+                    ["docker", "cp", patch_file, f"{container_name}:/tmp/model.patch"],
+                    capture_output=True, timeout=30
+                )
+                os.unlink(patch_file)
+            
+            # Run SWE-Lancer tests (this will do checkout, then apply patch, then run tests)
+            returncode, full_output, _ = run_swelancer_tests(
+                container_name, dataset, base_commit, model_patch=model_patch, timeout=timeout
             )
-            os.unlink(patch_file)
             
-            # Try git apply first, then patch
-            returncode, stdout, stderr = run_docker_command(
-                container_name,
-                "cd /testbed && git apply -v /tmp/model.patch 2>&1 || "
-                "patch --batch --fuzz=5 -p1 -i /tmp/model.patch 2>&1"
-            )
+            # Parse SWE-Lancer output using exit code parser
+            parser_func = get_parser(test_output_parser)
+            test_status_map = parser_func(full_output)
             
-            if returncode != 0 and "FAILED" in stdout:
-                logger.warning("Patch application may have failed")
+            logger.info(f"Parsed {len(test_status_map)} test results (SWE-Lancer)")
         
-        # Step 5: ALWAYS reset test files to ensure consistent evaluation
-        # This removes any model-created test files and restores original test files
-        # FIX: Previously we skipped reset when golden patch exists, but this allowed
-        # model-created test files to pollute the test run (e.g., GPT's test_namespace_layout.py)
-        logger.info("Resetting test files to clean state...")
-        
-        # First, remove any NEW test files created by the model (git clean)
-        run_docker_command(
-            container_name,
-            "cd /testbed && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
-        )
-
-        # Then, restore modified test files to original state (git checkout)
-        run_docker_command(
-            container_name,
-            "cd /testbed && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
-        )
-        
-        logger.info("Test files reset complete")
-        
-        # Step 6: Run test command (applies test patch and runs tests)
-        returncode, stdout, stderr = run_test_command(
-            container_name, dataset, timeout=timeout
-        )
-        
-        full_output = stdout + stderr
-        
-        # Step 7: Parse test output using appropriate parser based on test_output_parser
-        if 'unittest' in test_output_parser.lower():
-            test_status_map = parse_unittest_output(full_output)
+        # STANDARD EVALUATION FLOW
         else:
-            # Default to pytest parser (handles parse_log_pytest_v3, parse_log_pytest)
-            test_status_map = parse_pytest_output(full_output)
-        
-        logger.info(f"Parsed {len(test_status_map)} test results")
+            # Step 4: Apply model patch
+            if model_patch:
+                logger.info("Applying model patch...")
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.diff', delete=False) as f:
+                    f.write(model_patch)
+                    patch_file = f.name
+                
+                subprocess.run(
+                    ["docker", "cp", patch_file, f"{container_name}:/tmp/model.patch"],
+                    capture_output=True, timeout=30
+                )
+                os.unlink(patch_file)
+                
+                # Try git apply first, then patch
+                returncode, stdout, stderr = run_docker_command(
+                    container_name,
+                    "cd /app/repo && git apply -v /tmp/model.patch 2>&1 || "
+                    "patch --batch --fuzz=5 -p1 -i /tmp/model.patch 2>&1"
+                )
+                
+                if returncode != 0 and "FAILED" in stdout:
+                    logger.warning("Patch application may have failed")
+            
+            # Step 5: ALWAYS reset test files to ensure consistent evaluation
+            # This removes any model-created test files and restores original test files
+            # FIX: Previously we skipped reset when golden patch exists, but this allowed
+            # model-created test files to pollute the test run (e.g., GPT's test_namespace_layout.py)
+            logger.info("Resetting test files to clean state...")
+            
+            # First, remove any NEW test files created by the model (git clean)
+            run_docker_command(
+                container_name,
+                "cd /app/repo && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
+            )
+            
+            # Then, restore modified test files to original state (git checkout)
+            run_docker_command(
+                container_name,
+                "cd /app/repo && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
+            )
+            
+            logger.info("Test files reset complete")
+            
+            # Step 6: Run test command (applies test patch and runs tests)
+            returncode, stdout, stderr = run_test_command(
+                container_name, dataset, timeout=timeout
+            )
+            
+            full_output = stdout + stderr
+            
+            # Step 7: Parse test output using appropriate parser based on test_output_parser
+            if 'unittest' in test_output_parser.lower():
+                test_status_map = parse_unittest_output(full_output)
+            elif 'swelancer' in test_output_parser.lower() or 'playwright' in test_output_parser.lower():
+                parser_func = get_parser(test_output_parser)
+                test_status_map = parser_func(full_output)
+            else:
+                # Default to pytest parser (handles parse_log_pytest_v3, parse_log_pytest)
+                test_status_map = parse_pytest_output(full_output)
+            
+            logger.info(f"Parsed {len(test_status_map)} test results")
         
         # Step 8: Grade results
         grade_results = grade_test_results(test_status_map, fail_to_pass, pass_to_pass)
@@ -740,7 +1375,7 @@ def evaluate_instance(
             fail_to_pass_failed=grade_results['fail_to_pass_failed'],
             pass_to_pass_success=grade_results['pass_to_pass_success'],
             pass_to_pass_failed=grade_results['pass_to_pass_failed'],
-            test_output=full_output
+            test_output=full_output[:50000]  # Limit output size
         )
         
     except Exception as e:
@@ -797,15 +1432,11 @@ Examples:
     parser.add_argument("--trajectory-file", required=True, help="Path to trajectory output.jsonl")
     parser.add_argument("--dataset-file", required=True, help="Path to dataset JSONL")
     parser.add_argument("--docker-image", required=True, help="Docker image name or path to .tar")
-    parser.add_argument("--output-file", required=False, default=None, help="Output file for eval results (default: eval_output.jsonl beside trajectory file)")
+    parser.add_argument("--output-file", required=True, help="Output file for eval results")
     parser.add_argument("--timeout", type=int, default=900, help="Test timeout in seconds (default: 900)")
     
     args = parser.parse_args()
-
-    # Default output file: eval_output.jsonl in the same directory as the trajectory file
-    if args.output_file is None:
-        args.output_file = os.path.join(os.path.dirname(args.trajectory_file), "eval_output.jsonl")
-
+    
     # Run evaluation
     report = evaluate_instance(
         trajectory_file=args.trajectory_file,
@@ -838,58 +1469,22 @@ Examples:
         original = json.loads(content)
     
     # Add eval details
-    original['evaluation_details'] = asdict(report)
+    original['pilot2_eval_details'] = asdict(report)
     original['resolved'] = report.resolved
     
     with open(args.output_file, 'w') as f:
         f.write(json.dumps(original) + '\n')
     
-    # Write evals_report artifacts beside output.jsonl
-    evals_report_dir = os.path.join(os.path.dirname(args.output_file), "evals_report")
-    os.makedirs(evals_report_dir, exist_ok=True)
-
-    model_patch = extract_model_patch(original)
-
-    report_payload = {
-        "instance_id": report.instance_id,
-        "resolved": report.resolved,
-        "tests_passed": report.tests_passed,
-        "tests_failed": report.tests_failed,
-        "tests_error": report.tests_error,
-        "fail_to_pass_success": report.fail_to_pass_success,
-        "fail_to_pass_failed": report.fail_to_pass_failed,
-        "pass_to_pass_success": report.pass_to_pass_success,
-        "pass_to_pass_failed": report.pass_to_pass_failed,
-        "error_eval": report.error_eval,
-        "failed_apply_patch": report.failed_apply_patch,
-        "failed_apply_test_patch": report.failed_apply_test_patch,
-        "test_timeout": report.test_timeout,
-        "error_message": report.error_message,
-    }
-
-    with open(os.path.join(evals_report_dir, "report.json"), "w") as f:
-        json.dump(report_payload, f, indent=2)
-
-    with open(os.path.join(evals_report_dir, "patch.diff"), "w") as f:
-        f.write(model_patch or "")
-
-    with open(os.path.join(evals_report_dir, "test_output.txt"), "w") as f:
-        f.write(report.test_output or "")
-
-    with open(os.path.join(evals_report_dir, "run_instance.log"), "w") as f:
-        f.write("eval_pilot2_standardized.py summary\n")
-        f.write(f"instance_id: {report.instance_id}\n")
-        f.write(f"resolved: {report.resolved}\n")
-        f.write(f"tests_passed: {report.tests_passed}\n")
-        f.write(f"tests_failed: {report.tests_failed}\n")
-        f.write(f"tests_error: {report.tests_error}\n")
-        if report.error_message:
-            f.write(f"error_message: {report.error_message}\n")
-
     logger.info(f"Results saved to: {args.output_file}")
     
-    return 0 if report.resolved else 1
+    # Always return 0 if evaluation completed successfully
+    # The resolved status is captured in the output file
+    # Only return non-zero for actual evaluation errors (error_eval=True)
+    if report.error_eval and not report.tests_failed and not report.tests_passed:
+        return 1  # Actual evaluation error (e.g., container failed to start)
+    return 0  # Evaluation completed (test may have passed or failed)
 
 
 if __name__ == "__main__":
     exit(main())
+
