@@ -457,7 +457,7 @@ def initialize_runtime(
         logger.info('SWE-Lancer monolith mode detected - performing runtime base_commit checkout')
         base_commit = instance.get('base_commit', '')
         instance_id = instance.get('instance_id', '')
-        repo_path = instance.get('repo_path', '/app/expensify')
+        repo_path = instance.get('repo_path', '/app/repo')
         
         if base_commit:
             logger.info(f'Checking out base_commit {base_commit[:12]}... in {repo_path}')

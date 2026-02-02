@@ -538,7 +538,7 @@ def run_swelancer_tests(
                     issue_id = match.group(1)
                     logger.info(f"Extracted issue_id from FAIL_TO_PASS: {issue_id}")
     
-    repo_path = instance.get('repo_path', '/app/expensify')
+    repo_path = instance.get('repo_path', '/app/repo')
     
     # Step 1: Set up the test environment
     logger.info(f"Setting up SWE-Lancer test environment for issue {issue_id}...")
@@ -556,7 +556,7 @@ def run_swelancer_tests(
         # Install mkcert CA
         "mkcert -install 2>/dev/null || true",
         # Generate certificates
-        "cd /app/expensify/config/webpack && mkcert -key-file key.pem -cert-file certificate.pem localhost 127.0.0.1 dev.new.expensify.com 2>/dev/null || true",
+        "cd /app/repo/config/webpack && mkcert -key-file key.pem -cert-file certificate.pem localhost 127.0.0.1 dev.new.expensify.com 2>/dev/null || true",
         # Start Xvfb
         "pkill -9 Xvfb 2>/dev/null || true",
         "Xvfb :99 -screen 0 1920x1080x24 &",
@@ -1262,7 +1262,7 @@ def evaluate_instance(
         # SWE-LANCER EVALUATION FLOW
         if is_swelancer:
             base_commit = dataset.get('base_commit', '')
-            repo_path = dataset.get('repo_path', '/app/expensify')
+            repo_path = dataset.get('repo_path', '/app/repo')
             
             # IMPORTANT: Copy model patch to container first, but DON'T apply it yet
             # The patch must be applied AFTER git checkout in run_swelancer_tests

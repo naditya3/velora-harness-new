@@ -1197,7 +1197,7 @@ def evaluate_swelancer_instance(
                 error_message="Failed to start container"
             )
         
-        repo_path = "/app/expensify"
+        repo_path = "/app/repo"
         
         # If using monolith, checkout the correct base_commit
         if use_monolith and base_commit:

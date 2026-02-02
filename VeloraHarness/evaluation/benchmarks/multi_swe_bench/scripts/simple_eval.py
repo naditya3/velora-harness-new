@@ -167,7 +167,7 @@ def run_docker_eval(instance_id, image_name, patch, fail_to_pass, pass_to_pass, 
         
         # Find repo directory
         find_repo_cmd = ['docker', 'exec', container_name, 'bash', '-c',
-                        'if [ -d /app/expensify ]; then echo /app/expensify; elif [ -d /app/repo ]; then echo /app/repo; elif [ -d /testbed ]; then echo /testbed; elif [ -d /workspace ]; then echo /workspace; else find /app -maxdepth 1 -type d 2>/dev/null | head -2 | tail -1; fi']
+                        'if [ -d /app/repo ]; then echo /app/repo; elif [ -d /app/expensify ]; then echo /app/expensify; elif [ -d /testbed ]; then echo /testbed; elif [ -d /workspace ]; then echo /workspace; else find /app -maxdepth 1 -type d 2>/dev/null | head -2 | tail -1; fi']
         repo_result = subprocess.run(find_repo_cmd, capture_output=True, text=True)
         repo_dir = repo_result.stdout.strip() or '/app'
         print(f"Using repo directory: {repo_dir}")
