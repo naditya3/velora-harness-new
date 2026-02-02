@@ -94,3 +94,6 @@ dataset/
 
 # Config with credentials (use config.toml.example as template)
 config.toml
+
+# Evaluation batch logs (local run artifacts)
+evaluation/batch_logs/
