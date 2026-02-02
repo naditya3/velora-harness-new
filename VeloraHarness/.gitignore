@@ -79,9 +79,13 @@ config.toml
 llm_completions/
 evaluation_outputs/
 
+# Dataset files (should not be in repo)
+dataset/
+
+# Evaluation batch logs (local run artifacts)
+evaluation/batch_logs/
 
 # Config files with API keys (use .example files as templates)
-config.toml
 **/config.toml
 *.local
 *.backup

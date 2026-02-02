@@ -287,6 +287,139 @@ def parse_log_make(log: str, grading_spec: Any = None) -> Dict[str, str]:
     return test_status_map
 
 
+def parse_log_playwright(log: str, grading_spec: Any = None) -> Dict[str, str]:
+    """
+    Parser for SWE-Lancer Playwright tests run via pytest.
+    
+    SWE-Lancer uses Python tests with Playwright for browser automation.
+    The tests are run via pytest and grading is primarily based on exit code.
+    
+    Handles formats like:
+    - pytest summary: "1 passed in 45.23s"
+    - pytest summary: "1 failed, 0 passed in 30.12s"
+    - pytest exit codes in log
+    - test function names: test_expensify_0000
+    """
+    test_status_map = {}
+    
+    # Check for pytest exit code (SWE-Lancer specific)
+    exit_code_match = re.search(r'pytest_exit_code[:\s]+(\d+)', log)
+    if exit_code_match:
+        exit_code = int(exit_code_match.group(1))
+        if exit_code == 0:
+            # All tests passed - mark any found tests as passed
+            for match in re.finditer(r'(test_\w+)', log):
+                test_status_map[match.group(1)] = TestStatus.PASSED
+            if not test_status_map:
+                test_status_map['all_tests'] = TestStatus.PASSED
+            return test_status_map
+    
+    # Check for pytest summary line
+    # Pattern: "1 passed" or "1 failed" or "1 passed, 1 failed"
+    passed_match = re.search(r'(\d+)\s+passed', log)
+    failed_match = re.search(r'(\d+)\s+failed', log)
+    error_match = re.search(r'(\d+)\s+error', log)
+    
+    # Look for specific test function names
+    test_funcs = re.findall(r'(test_expensify_\d+|test_\w+::\w+)', log)
+    
+    # Determine overall status from summary
+    has_failures = (failed_match and int(failed_match.group(1)) > 0) or \
+                   (error_match and int(error_match.group(1)) > 0)
+    has_passes = passed_match and int(passed_match.group(1)) > 0
+    
+    # If we found test function names, use them
+    if test_funcs:
+        for test_name in set(test_funcs):
+            if has_failures:
+                test_status_map[test_name] = TestStatus.FAILED
+            elif has_passes:
+                test_status_map[test_name] = TestStatus.PASSED
+            else:
+                test_status_map[test_name] = TestStatus.FAILED
+    else:
+        # Generic result based on summary
+        if has_failures:
+            test_status_map['test_expensify_0000'] = TestStatus.FAILED
+        elif has_passes:
+            test_status_map['test_expensify_0000'] = TestStatus.PASSED
+    
+    # Also check for PASSED/FAILED patterns in log
+    for line in log.split('\n'):
+        line = line.strip()
+        # Pattern: "PASSED tests/12155_1/test.py::test_expensify_0000"
+        match = re.match(r'^(PASSED|FAILED|ERROR)\s+(.+)', line)
+        if match:
+            status, test_path = match.groups()
+            # Extract test name from path
+            if '::' in test_path:
+                test_name = test_path.split('::')[-1]
+            else:
+                test_name = test_path
+            test_status_map[test_name] = status
+    
+    return test_status_map
+
+
+def parse_log_swelancer_exitcode(log: str, grading_spec: Any = None) -> Dict[str, str]:
+    """
+    Parser for SWE-Lancer that uses pytest exit code for grading.
+    
+    This is the official SWE-Lancer grading method:
+    - Exit code 0 = PASS
+    - Exit code 1 = FAIL (test failures)
+    - Exit code >= 2 = ERROR (collection/execution errors)
+    
+    The log should contain the pytest exit code from:
+    /app/tests/logs/<ISSUE_ID>/pytest_exit_code
+    """
+    test_status_map = {}
+    
+    # Look for exit code patterns
+    exit_code = None
+    
+    # Pattern 1: Direct exit code
+    match = re.search(r'pytest_exit_code[:\s=]+(\d+)', log, re.IGNORECASE)
+    if match:
+        exit_code = int(match.group(1))
+    
+    # Pattern 2: Exit code at end of output
+    if exit_code is None:
+        match = re.search(r'exit\s+code[:\s]+(\d+)', log, re.IGNORECASE)
+        if match:
+            exit_code = int(match.group(1))
+    
+    # Pattern 3: Return code
+    if exit_code is None:
+        match = re.search(r'return\s*code[:\s]+(\d+)', log, re.IGNORECASE)
+        if match:
+            exit_code = int(match.group(1))
+    
+    # Find test names in log
+    test_names = re.findall(r'tests/[\w_]+/test\.py::(\w+)', log)
+    if not test_names:
+        test_names = re.findall(r'(test_expensify_\d+)', log)
+    if not test_names:
+        test_names = ['test_expensify_0000']  # Default
+    
+    # Grade based on exit code
+    if exit_code is not None:
+        if exit_code == 0:
+            for name in set(test_names):
+                test_status_map[name] = TestStatus.PASSED
+        elif exit_code == 1:
+            for name in set(test_names):
+                test_status_map[name] = TestStatus.FAILED
+        else:
+            for name in set(test_names):
+                test_status_map[name] = TestStatus.ERROR
+    else:
+        # Fallback to log parsing if no exit code found
+        return parse_log_playwright(log, grading_spec)
+    
+    return test_status_map
+
+
 # Parser registry
 PARSER_REGISTRY: Dict[str, Callable] = {
     "python/parse_log_pytest_v3": parse_log_pytest_v3,
@@ -299,6 +432,10 @@ PARSER_REGISTRY: Dict[str, Callable] = {
     "c/parse_log_meson": parse_log_meson,
     "cpp/parse_log_meson": parse_log_meson,
     "generic/parse_log_make": parse_log_make,
+    # SWE-Lancer Playwright parsers
+    "javascript/parse_log_playwright": parse_log_playwright,
+    "swelancer/parse_log_playwright": parse_log_playwright,
+    "swelancer/parse_log_exitcode": parse_log_swelancer_exitcode,
 }
 
 
@@ -943,6 +1080,277 @@ def evaluate_instance(
 
 
 # ============================================================================
+# SWE-LANCER SPECIFIC EVALUATION
+# ============================================================================
+
+# Environment variables for SWE-Lancer monolith mode
+USE_MONOLITH_IMAGE = os.environ.get('USE_MONOLITH_IMAGE', 'false').lower() == 'true'
+MONOLITH_IMAGE = os.environ.get('MONOLITH_IMAGE', 'swelancer/swelancer_x86_monolith:releasev1')
+
+
+def start_swelancer_container(docker_image: str, container_name: str, platform: str = "linux/amd64") -> bool:
+    """Start a SWE-Lancer Docker container with proper entrypoint."""
+    try:
+        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, timeout=30)
+    except:
+        pass
+    
+    try:
+        # SWE-Lancer images need to run /app/tests/run.sh as entrypoint
+        result = subprocess.run(
+            ["docker", "run", "-d", "--name", container_name,
+             "--platform", platform,
+             "--entrypoint", "/bin/bash",
+             docker_image, "-c", "/app/tests/run.sh"],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode != 0:
+            logger.error(f"Failed to start container: {result.stderr}")
+            return False
+        
+        # Wait for setup to complete
+        logger.info("Waiting for SWE-Lancer container setup to complete...")
+        for _ in range(60):  # Wait up to 5 minutes
+            time.sleep(5)
+            returncode, stdout, _ = run_docker_command(container_name, "cat /setup_done.txt 2>/dev/null || echo 'waiting'")
+            if 'done' in stdout.lower():
+                logger.info("Container setup complete")
+                return True
+        
+        logger.warning("Container setup timed out, proceeding anyway")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to start container: {e}")
+        return False
+
+
+def evaluate_swelancer_instance(
+    trajectory_file: str,
+    instance_id: str,
+    docker_image: str,
+    base_commit: str,
+    fail_to_pass: List[str],
+    pass_to_pass: List[str],
+    timeout: int = 900,
+    use_monolith: bool = False,
+) -> EvalReport:
+    """
+    Evaluate a SWE-Lancer trajectory using the official grading method.
+    
+    SWE-Lancer grading is based on pytest exit code:
+    - Exit code 0 = PASS
+    - Exit code 1 = FAIL
+    - Exit code >= 2 = ERROR
+    
+    Args:
+        trajectory_file: Path to trajectory output.jsonl
+        instance_id: SWE-Lancer instance ID (e.g., "12155_1")
+        docker_image: Docker image name (or monolith image)
+        base_commit: Git commit hash to checkout for this task
+        fail_to_pass: List of F2P test names
+        pass_to_pass: List of P2P test names  
+        timeout: Test timeout in seconds
+        use_monolith: If True, checkout base_commit at runtime
+    """
+    
+    container_name = f"swelancer_eval_{instance_id}_{int(time.time())}"
+    
+    try:
+        # Load trajectory
+        logger.info(f"Loading trajectory from {trajectory_file}")
+        with open(trajectory_file, 'r') as f:
+            trajectory = json.loads(f.readline())
+        
+        model_patch = extract_model_patch(trajectory)
+        
+        if not model_patch:
+            logger.warning("No model patch found in trajectory")
+        
+        logger.info(f"Instance ID: {instance_id}")
+        logger.info(f"Base Commit: {base_commit[:12]}...")
+        logger.info(f"F2P tests: {len(fail_to_pass)}")
+        logger.info(f"Docker Image: {docker_image}")
+        logger.info(f"Using Monolith: {use_monolith}")
+        
+        # Start container
+        logger.info(f"Starting SWE-Lancer container...")
+        if not start_swelancer_container(docker_image, container_name):
+            return EvalReport(
+                instance_id=instance_id,
+                velora_instance_id=instance_id,
+                job_name="swelancer",
+                language="javascript",
+                resolved=False,
+                failed_apply_patch=False,
+                failed_apply_test_patch=False,
+                error_eval=True,
+                test_timeout=False,
+                tests_passed=0,
+                tests_failed=0,
+                tests_error=0,
+                fail_to_pass_success=[],
+                fail_to_pass_failed=fail_to_pass,
+                pass_to_pass_success=[],
+                pass_to_pass_failed=pass_to_pass,
+                test_output="",
+                error_message="Failed to start container"
+            )
+        
+        repo_path = "/app/expensify"
+        
+        # If using monolith, checkout the correct base_commit
+        if use_monolith and base_commit:
+            logger.info(f"Monolith mode: Checking out base commit {base_commit[:12]}...")
+            returncode, stdout, stderr = run_docker_command(
+                container_name,
+                f"cd {repo_path} && git fetch origin 2>/dev/null || true && "
+                f"git checkout {base_commit} 2>&1 && "
+                f"git reset --hard {base_commit} 2>&1",
+                timeout=300
+            )
+            if returncode != 0:
+                logger.warning(f"Checkout may have issues: {stderr}")
+            else:
+                logger.info(f"Successfully checked out {base_commit[:12]}")
+        
+        # Apply model patch
+        if model_patch:
+            logger.info("Applying model patch...")
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.diff', delete=False) as f:
+                f.write(model_patch)
+                patch_file = f.name
+            
+            subprocess.run(
+                ["docker", "cp", patch_file, f"{container_name}:/tmp/model.patch"],
+                capture_output=True, timeout=30
+            )
+            os.unlink(patch_file)
+            
+            # Apply patch with fallbacks
+            returncode, stdout, stderr = run_docker_command(
+                container_name,
+                f"cd {repo_path} && git apply -v /tmp/model.patch 2>&1 || "
+                f"git apply --reject --whitespace=fix /tmp/model.patch 2>&1 || "
+                "patch --batch --fuzz=5 -p1 -i /tmp/model.patch 2>&1 || true"
+            )
+            logger.info(f"Patch apply result: returncode={returncode}")
+        
+        # Create logs directory for this instance
+        run_docker_command(
+            container_name,
+            f"mkdir -p /app/tests/logs/{instance_id}"
+        )
+        
+        # Run tests using the official SWE-Lancer method (ansible-playbook)
+        logger.info(f"Running SWE-Lancer tests for instance {instance_id}...")
+        returncode, stdout, stderr = run_docker_command(
+            container_name,
+            f'export ISSUE_ID={instance_id} && '
+            f'ansible-playbook -i "localhost," --connection=local /app/tests/run_tests.yml 2>&1',
+            timeout=timeout
+        )
+        
+        ansible_output = stdout + stderr
+        logger.info(f"Ansible playbook completed with returncode={returncode}")
+        
+        # Get pytest exit code (the official grading method)
+        _, exit_code_str, _ = run_docker_command(
+            container_name,
+            f"cat /app/tests/logs/{instance_id}/pytest_exit_code 2>/dev/null || echo '-1'"
+        )
+        
+        try:
+            pytest_exit = int(exit_code_str.strip().split('\n')[-1])
+        except (ValueError, IndexError):
+            pytest_exit = -1
+        
+        logger.info(f"Pytest exit code: {pytest_exit}")
+        
+        # Get pytest log for detailed output
+        _, pytest_log, _ = run_docker_command(
+            container_name,
+            f"cat /app/tests/logs/{instance_id}/pytest.log 2>/dev/null || echo 'No pytest log'"
+        )
+        
+        full_output = f"=== ANSIBLE OUTPUT ===\n{ansible_output}\n\n=== PYTEST LOG ===\n{pytest_log}\n\n=== PYTEST EXIT CODE ===\n{pytest_exit}"
+        
+        # Grade based on pytest exit code (official SWE-Lancer method)
+        if pytest_exit == 0:
+            # All tests passed
+            resolved = True
+            fail_to_pass_success = fail_to_pass.copy()
+            fail_to_pass_failed = []
+            tests_passed = len(fail_to_pass)
+            tests_failed = 0
+            tests_error = 0
+        elif pytest_exit == 1:
+            # Tests failed
+            resolved = False
+            fail_to_pass_success = []
+            fail_to_pass_failed = fail_to_pass.copy()
+            tests_passed = 0
+            tests_failed = len(fail_to_pass)
+            tests_error = 0
+        else:
+            # Error (exit code >= 2 or -1)
+            resolved = False
+            fail_to_pass_success = []
+            fail_to_pass_failed = fail_to_pass.copy()
+            tests_passed = 0
+            tests_failed = 0
+            tests_error = len(fail_to_pass)
+        
+        return EvalReport(
+            instance_id=instance_id,
+            velora_instance_id=instance_id,
+            job_name="swelancer",
+            language="javascript",
+            resolved=resolved,
+            failed_apply_patch=False,
+            failed_apply_test_patch=False,
+            error_eval=(pytest_exit >= 2 or pytest_exit == -1),
+            test_timeout=False,
+            tests_passed=tests_passed,
+            tests_failed=tests_failed,
+            tests_error=tests_error,
+            fail_to_pass_success=fail_to_pass_success,
+            fail_to_pass_failed=fail_to_pass_failed,
+            pass_to_pass_success=pass_to_pass.copy() if resolved else [],
+            pass_to_pass_failed=[] if resolved else pass_to_pass.copy(),
+            test_output=full_output[-200000:],
+            f2p_validation_notes=f"pytest_exit_code={pytest_exit}"
+        )
+        
+    except Exception as e:
+        logger.error(f"SWE-Lancer evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return EvalReport(
+            instance_id=instance_id,
+            velora_instance_id=instance_id,
+            job_name="swelancer",
+            language="javascript",
+            resolved=False,
+            failed_apply_patch=False,
+            failed_apply_test_patch=False,
+            error_eval=True,
+            test_timeout=False,
+            tests_passed=0,
+            tests_failed=0,
+            tests_error=0,
+            fail_to_pass_success=[],
+            fail_to_pass_failed=fail_to_pass,
+            pass_to_pass_success=[],
+            pass_to_pass_failed=pass_to_pass,
+            test_output="",
+            error_message=str(e)
+        )
+    finally:
+        stop_container(container_name)
+
+
+# ============================================================================
 # CLI
 # ============================================================================
 
@@ -951,26 +1359,60 @@ def main():
         description="Velora3 Multi-Language Evaluation Script"
     )
     parser.add_argument("--trajectory-file", required=True, help="Path to trajectory output.jsonl")
-    parser.add_argument("--f2p-file", required=True, help="Path to extracted F2P tests JSONL")
+    parser.add_argument("--f2p-file", help="Path to extracted F2P tests JSONL (optional for SWE-Lancer)")
     parser.add_argument("--instance-id", required=True, help="Velora instance ID")
     parser.add_argument("--docker-image", required=True, help="Docker image name")
     parser.add_argument("--output-file", required=True, help="Output file for eval results")
     parser.add_argument("--timeout", type=int, default=900, help="Test timeout in seconds")
     parser.add_argument("--test-patch-file", help="Optional: Path to golden test patch file (overrides trajectory)")
     parser.add_argument("--csv-f2p-file", help="Optional: Path to CSV-extracted F2P tests file")
+    # SWE-Lancer specific arguments
+    parser.add_argument("--swelancer", action="store_true", help="Use SWE-Lancer evaluation mode")
+    parser.add_argument("--base-commit", help="Base commit hash (required for SWE-Lancer monolith mode)")
+    parser.add_argument("--use-monolith", action="store_true", help="Use monolith image with runtime base_commit checkout")
+    parser.add_argument("--fail-to-pass", help="Comma-separated list of F2P test names (for SWE-Lancer)")
+    parser.add_argument("--pass-to-pass", help="Comma-separated list of P2P test names (for SWE-Lancer)")
     
     args = parser.parse_args()
     
-    # Run evaluation
-    report = evaluate_instance(
-        trajectory_file=args.trajectory_file,
-        f2p_file=args.f2p_file,
-        velora_instance_id=args.instance_id,
-        docker_image=args.docker_image,
-        timeout=args.timeout,
-        test_patch_file=args.test_patch_file,
-        csv_f2p_file=args.csv_f2p_file
-    )
+    # Check for SWE-Lancer mode
+    if args.swelancer:
+        logger.info("Running in SWE-Lancer evaluation mode")
+        
+        # Parse F2P and P2P test lists
+        fail_to_pass = args.fail_to_pass.split(',') if args.fail_to_pass else []
+        pass_to_pass = args.pass_to_pass.split(',') if args.pass_to_pass else []
+        
+        # Use monolith image if requested
+        docker_image = args.docker_image
+        if args.use_monolith:
+            docker_image = os.environ.get('MONOLITH_IMAGE', 'swelancer/swelancer_x86_monolith:releasev1')
+            logger.info(f"Using monolith image: {docker_image}")
+        
+        report = evaluate_swelancer_instance(
+            trajectory_file=args.trajectory_file,
+            instance_id=args.instance_id,
+            docker_image=docker_image,
+            base_commit=args.base_commit or "",
+            fail_to_pass=fail_to_pass,
+            pass_to_pass=pass_to_pass,
+            timeout=args.timeout,
+            use_monolith=args.use_monolith,
+        )
+    else:
+        # Standard multi-language evaluation
+        if not args.f2p_file:
+            parser.error("--f2p-file is required for non-SWE-Lancer evaluation")
+        
+        report = evaluate_instance(
+            trajectory_file=args.trajectory_file,
+            f2p_file=args.f2p_file,
+            velora_instance_id=args.instance_id,
+            docker_image=args.docker_image,
+            timeout=args.timeout,
+            test_patch_file=args.test_patch_file,
+            csv_f2p_file=args.csv_f2p_file
+        )
     
     # Print summary
     logger.info("=" * 60)

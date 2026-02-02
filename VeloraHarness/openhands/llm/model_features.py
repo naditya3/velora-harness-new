@@ -82,6 +82,8 @@ FUNCTION_CALLING_PATTERNS: list[str] = [
     # Google Gemini
     'gemini-2.5-pro*',
     'gemini-3*',
+    'gemini-3-pro-preview*',
+    'gemini-3-pro-preview-2025-01-31',
     # Groq models (via groq/ provider prefix)
     'groq/*',
     # Others
@@ -111,6 +113,8 @@ REASONING_EFFORT_PATTERNS: list[str] = [
     'o4-mini-2025-04-16',
     'gemini-2.5-flash',
     'gemini-2.5-pro',
+    'gemini-3-pro-preview',
+    'gemini-3-pro-preview-2025-01-31',
     'gpt-5*',
     # DeepSeek reasoning family
     'deepseek-r1-0528*',
