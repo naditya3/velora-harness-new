@@ -85,3 +85,7 @@ dataset/
 # Evaluation batch logs (local run artifacts)
 evaluation/batch_logs/
 
+# Config files with API keys (use .example files as templates)
+**/config.toml
+*.local
+*.backup
