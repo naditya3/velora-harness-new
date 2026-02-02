@@ -285,12 +285,13 @@ def prep_build_folder(
     # Copy the 'skills' directory (Skills)
     shutil.copytree(Path(project_root, 'skills'), Path(build_folder, 'code', 'skills'))
 
-    # Copy pyproject.toml and poetry.lock files
-    for file in ['pyproject.toml', 'poetry.lock']:
+    # Copy pyproject.toml, poetry.lock, and build_vscode.py files
+    for file in ['pyproject.toml', 'poetry.lock', 'build_vscode.py']:
         src = Path(openhands_source_dir, file)
         if not src.exists():
             src = Path(project_root, file)
-        shutil.copy2(src, Path(build_folder, 'code', file))
+        if src.exists():  # build_vscode.py might not exist in all setups
+            shutil.copy2(src, Path(build_folder, 'code', file))
 
     # Create a Dockerfile and write it to build_folder
     dockerfile_content = _generate_dockerfile(

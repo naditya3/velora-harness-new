@@ -63,7 +63,6 @@ personal/
 *.log
 logs/
 
-
 # Docker
 *.tar
 
@@ -75,15 +74,23 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
-config.toml
-
-# Poetry
 
 # LLM completions and evaluation outputs
 llm_completions/
 evaluation_outputs/
 
-# Add VSCode integration build artifacts
+# Dataset files (should not be in repo)
+dataset/
+
+# Evaluation batch logs (local run artifacts)
+evaluation/batch_logs/
+
+# Config files with API keys (use .example files as templates)
+**/config.toml
+*.local
+*.backup
+
+# VSCode integration build artifacts
 openhands/integrations/vscode/node_modules/
 openhands/integrations/vscode/out/
 openhands/integrations/vscode/*.vsix

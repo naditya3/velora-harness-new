@@ -51,6 +51,17 @@ except ImportError:
     NATIVE_GEMINI_AVAILABLE = False
     logger.warning('Native Gemini SDK not available - thought_signatures not supported')
 
+# Import liteLLM Responses API handler for gpt-5.2-codex, o3, etc.
+try:
+    from openhands.llm.gpt_responses_litellm import (
+        litellm_responses_completion,
+        should_use_litellm_responses,
+    )
+    LITELLM_RESPONSES_AVAILABLE = True
+except ImportError:
+    LITELLM_RESPONSES_AVAILABLE = False
+    logger.warning('liteLLM Responses API handler not available')
+
 __all__ = ['LLM']
 
 # tuple of exceptions to retry on
@@ -90,6 +101,9 @@ class LLM(RetryMixin, DebugMixin):
         self.cost_metric_supported: bool = True
         self.config: LLMConfig = copy.deepcopy(config)
         self.service_id = service_id
+        # Generate unique conversation_id for Responses API state tracking
+        import uuid
+        self._conversation_id = f"conv_{self.service_id}_{uuid.uuid4().hex[:8]}"
         self.metrics: Metrics = (
             metrics if metrics is not None else Metrics(model_name=config.model)
         )
@@ -170,6 +184,8 @@ class LLM(RetryMixin, DebugMixin):
             else:
                 if self.config.reasoning_effort is not None:
                     kwargs['reasoning_effort'] = self.config.reasoning_effort
+                    # Prevent drop_params from filtering out reasoning_effort for Responses API models
+                    kwargs['allowed_openai_params'] = kwargs.get('allowed_openai_params', []) + ['reasoning_effort']
             kwargs.pop(
                 'temperature', None
             )  # temperature is not supported for reasoning models
@@ -278,21 +294,76 @@ class LLM(RetryMixin, DebugMixin):
 
             kwargs['messages'] = messages
 
+            # Check if we should use liteLLM's responses() method for Responses API models
+            # For models that require responses() method (gpt-5.2-codex with reasoning_effort)
+            from openhands.llm.gpt_responses_litellm import should_use_litellm_responses
+            from openhands.llm.gpt_responses_openai_direct import openai_responses_completion
+            
+            if LITELLM_RESPONSES_AVAILABLE and should_use_litellm_responses(
+                self.config.model,
+                self.config.native_tool_calling,
+                self.config.reasoning_effort  # Use config value, not kwargs (may be removed by mock_function_calling)
+            ):
+                logger.info(
+                    f'Using DIRECT OpenAI SDK for {self.config.model} '
+                    '(bypassing liteLLM to avoid reasoning_effort bugs)'
+                )
+                try:
+                    # #region agent log
+                    # Extract previous output_items from messages for reasoning accumulation
+                    previous_output_items = []
+                    logger.info(f'[REASONING-DEBUG] Checking {len(messages)} messages for previous output_items')
+                    for idx, msg in enumerate(messages):
+                        msg_role = msg.get('role') if isinstance(msg, dict) else 'unknown'
+                        logger.info(f'[REASONING-DEBUG] Message {idx}: role={msg_role}, has_output_items={"output_items" in str(msg)[:500]}')
+                        if isinstance(msg, dict) and msg.get('role') == 'assistant':
+                            # Check for explicit output_items field
+                            if 'output_items' in msg:
+                                items = msg.get('output_items', [])
+                                if isinstance(items, list):
+                                    previous_output_items.extend(items)
+                                    logger.info(f'[REASONING-DEBUG] Found {len(items)} output_items in message {idx}')
+                    
+                    if previous_output_items:
+                        logger.info(f'[REASONING] Passing {len(previous_output_items)} previous output_items for context accumulation')
+                    else:
+                        logger.info(f'[REASONING-DEBUG] No previous output_items found to pass')
+                    # #endregion
+                    
+                    resp = openai_responses_completion(
+                        model=self.config.model,
+                        messages=messages,
+                        tools=kwargs.get('tools'),
+                        api_key=self.config.api_key.get_secret_value() if self.config.api_key else None,
+                        max_tokens=self.config.max_output_tokens,
+                        reasoning_effort=self.config.reasoning_effort,
+                        conversation_id=self._conversation_id,
+                    )
+                    # Process metrics and then return
+                    cost = self._post_completion(resp)
+                    return resp
+                except Exception as e:
+                    logger.error(f'Direct OpenAI SDK responses() failed: {e}, falling back to completion()')
+                    # Fall through to standard liteLLM completion
+
             # Check if we should use native Gemini SDK for thought_signature support
             if NATIVE_GEMINI_AVAILABLE and should_use_native_gemini(
-                self.config.model, self.config.completion_kwargs
+                self.config.model, self.config.completion_kwargs, kwargs
             ):
                 logger.info(
                     f'Using native GenAI SDK for {self.config.model} with thinking support'
                 )
                 try:
+                    # Prepare kwargs for native SDK (remove messages/tools to avoid duplicates)
+                    native_kwargs = {k: v for k, v in kwargs.items() if k not in ['messages', 'tools']}
+
                     resp = native_gemini_completion(
                         model=self.config.model,
                         messages=messages,
                         tools=kwargs.get('tools'),
                         api_key=self.config.api_key.get_secret_value() if self.config.api_key else None,
                         completion_kwargs=self.config.completion_kwargs,
-                        **kwargs
+                        **native_kwargs
                     )
                     # Convert to ModelResponse if needed
                     if not isinstance(resp, ModelResponse):
@@ -304,6 +375,7 @@ class LLM(RetryMixin, DebugMixin):
                     # Calculate cost
                     cost = self._post_completion(resp)
 
+                    cost = self._post_completion(resp)
                     return resp
                 except Exception as e:
                     logger.error(f'Native Gemini SDK failed: {e}, falling back to liteLLM')
@@ -733,6 +805,7 @@ class LLM(RetryMixin, DebugMixin):
             latest_latency = self.metrics.response_latencies[-1]
             stats += 'Response Latency: %.3f seconds\n' % latest_latency.latency
 
+        logger.info(f"[POST-COMPLETION-DEBUG] response type={type(response)}, usage={response.get('usage', 'N/A')}")
         usage: Usage | None = response.get('usage')
         response_id = response.get('id', 'unknown')
 
