@@ -125,158 +125,11 @@ def parse_log_unittest(log: str, grading_spec: Any = None) -> Dict[str, str]:
     return test_status_map
 
 
-def parse_log_phpunit(log: str, grading_spec: Any = None) -> Dict[str, str]:
-    """
-    Parser for test logs generated with PHPUnit framework.
-    
-    Handles PHPUnit testdox output format:
-        Class Name (Namespace\TestClass)
-         ✔ Test name passes
-         ✘ Test name fails
-        
-    Maps to: Namespace\TestClass::testTestNamePasses
-    """
-    test_status_map = {}
-    lines = log.split("\n")
-    
-    # Track current test class from testdox headers
-    current_class = None
-    
-    def testdox_to_method_name(testdox_name: str) -> str:
-        """Convert testdox name to method name."""
-        words = testdox_name.strip().split()
-        if not words:
-            return ""
-        method = "test" + words[0].capitalize()
-        for word in words[1:]:
-            method += word.capitalize()
-        return method
-    
-    # Track failures/errors from the detailed section  
-    in_failure_section = False
-    in_error_section = False
-    current_failed_tests = set()
-    current_error_tests = set()
-    
-    for i, line in enumerate(lines):
-        line_stripped = line.strip()
-        
-        # Detect testdox class header: "Class Name (Namespace\TestClass)"
-        class_header_match = re.match(r'^(.+?)\s*\(([^)]+)\)\s*$', line_stripped)
-        if class_header_match and '\\' in class_header_match.group(2):
-            current_class = class_header_match.group(2)
-            continue
-        
-        # Detect failure section start
-        if line_stripped.startswith("There was") and "failure" in line_stripped.lower():
-            in_failure_section = True
-            in_error_section = False
-            current_class = None
-            continue
-        if line_stripped.startswith("There was") and "error" in line_stripped.lower():
-            in_error_section = True
-            in_failure_section = False
-            current_class = None
-            continue
-        if line_stripped.startswith("There were") and "failure" in line_stripped.lower():
-            in_failure_section = True
-            in_error_section = False
-            current_class = None
-            continue
-        if line_stripped.startswith("There were") and "error" in line_stripped.lower():
-            in_error_section = True
-            in_failure_section = False
-            current_class = None
-            continue
-            
-        # Parse failure/error entries like: 1) Namespace\Class::testMethod
-        if (in_failure_section or in_error_section) and re.match(r'^\d+\)', line_stripped):
-            match = re.match(r'^\d+\)\s*(.+)', line_stripped)
-            if match:
-                test_name = match.group(1).strip()
-                if ' with data set' in test_name:
-                    test_name = test_name.split(' with data set')[0]
-                if in_failure_section:
-                    current_failed_tests.add(test_name)
-                else:
-                    current_error_tests.add(test_name)
-        
-        # Helper to get alternative class names for matching
-        def get_alternative_class_names(class_name: str) -> List[str]:
-            """Generate alternative class names for matching.
-            
-            PHPUnit 10+ uses 'UnnamedTests' for classes without proper @testdox.
-            We need to try common alternatives like 'Test', 'Tests', etc.
-            """
-            alternatives = [class_name]
-            
-            # If class ends with 'UnnamedTests', try parent namespace + common test class names
-            if class_name.endswith('\\UnnamedTests'):
-                parent_ns = class_name.rsplit('\\', 1)[0]
-                alternatives.extend([
-                    f"{parent_ns}\\Test",
-                    f"{parent_ns}\\Tests", 
-                    f"{parent_ns}\\TestCase",
-                ])
-            
-            # Add "Test" suffix if not present
-            if not class_name.endswith("Test"):
-                alternatives.append(class_name + "Test")
-            
-            return alternatives
-        
-        # Testdox format: ✔ or ✓ for pass, ✘ or ✗ for fail
-        if '✔' in line or '✓' in line:
-            testdox_name = re.sub(r'[✔✓]\s*', '', line_stripped).strip()
-            if testdox_name and current_class:
-                method_name = testdox_to_method_name(testdox_name)
-                # Add all alternative class name variants
-                for alt_class in get_alternative_class_names(current_class):
-                    full_test_name = f"{alt_class}::{method_name}"
-                    test_status_map[full_test_name] = TestStatus.PASSED
-            elif testdox_name:
-                test_status_map[testdox_name] = TestStatus.PASSED
-                
-        elif '✘' in line or '✗' in line:
-            testdox_name = re.sub(r'[✘✗]\s*', '', line_stripped).strip()
-            if testdox_name and current_class:
-                method_name = testdox_to_method_name(testdox_name)
-                # Add all alternative class name variants
-                for alt_class in get_alternative_class_names(current_class):
-                    full_test_name = f"{alt_class}::{method_name}"
-                    test_status_map[full_test_name] = TestStatus.FAILED
-            elif testdox_name:
-                test_status_map[testdox_name] = TestStatus.FAILED
-                
-        # Standard format: ClassName::testMethod
-        if '::test' in line_stripped:
-            match = re.search(r'([\w\\\\]+::\w+)', line_stripped)
-            if match:
-                test_name = match.group(1)
-                lower_line = line_stripped.lower()
-                if 'ok' in lower_line or 'pass' in lower_line:
-                    test_status_map[test_name] = TestStatus.PASSED
-                elif 'fail' in lower_line:
-                    test_status_map[test_name] = TestStatus.FAILED
-                elif 'error' in lower_line:
-                    test_status_map[test_name] = TestStatus.ERROR
-                elif 'skip' in lower_line:
-                    test_status_map[test_name] = TestStatus.SKIPPED
-    
-    # Apply failures and errors found in detailed sections
-    for test in current_failed_tests:
-        test_status_map[test] = TestStatus.FAILED
-    for test in current_error_tests:
-        test_status_map[test] = TestStatus.ERROR
-    
-    return test_status_map
-
 # Parser registry mapping parser names to functions
 PARSER_REGISTRY: Dict[str, Callable] = {
     "python/parse_log_pytest_v3": parse_log_pytest_v3,
     "python/parse_log_pytest": parse_log_pytest_v3,  # Alias
     "python/parse_log_unittest": parse_log_unittest,
-    "php/parse_log_phpunit": parse_log_phpunit,
 }
 
 
@@ -389,9 +242,12 @@ def extract_model_patch(trajectory: Dict[str, Any]) -> str:
     
     # ONLY exact artifact filenames from OpenHands workspace
     # These are NOT code - they're agent execution metadata
+    # Also exclude test infrastructure that exists in Docker images
     EXCLUDED_FILES = [
         'command', 'exec_time', 'exit_code', 'stdout', 'stderr',
-        'test_output', 'test_log', '.test_', '_test_output'
+        'test_output', 'test_log', '.test_', '_test_output',
+        'unittest_loader_no_traceback.py',  # Test runner infrastructure (baked in images)
+        'unittest_loader.py'  # Test runner infrastructure (baked in images)
     ]
     
     lines = git_patch.split('\n')
@@ -442,10 +298,12 @@ def extract_model_patch(trajectory: Dict[str, Any]) -> str:
 def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int = 900) -> tuple:
     """
     Run the test command from the dataset, following client's test_spec.py flow.
-    
+
     Returns: (returncode, stdout, stderr)
     """
-    repo_directory = "/app/repo"
+    # Use /testbed for mswebench images (standard SWE-bench location)
+    # Fallback to /app/repo for older OpenHands images
+    repo_directory = "/testbed"
     test_patch_raw = instance.get("test_patch", "")
     test_command = instance.get("test_command", "pytest")
     
@@ -507,9 +365,11 @@ def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int
         parts = test_command.split("&&")
         test_exec = parts[-1].strip()  # Get the actual test command (pytest, etc.)
     
-    # Build a clean command: source ENV, unset proxies, then run tests
+    # Build a clean command: activate conda environment, unset proxies, then run tests
+    # Always source conda.sh and activate testbed for mswebench images
+    # The || true ensures we continue even if old /saved/ENV doesn't exist
     full_command = (
-        f"source /saved/ENV 2>/dev/null || source /saved/*/ENV 2>/dev/null || true; "
+        f"source /opt/miniconda3/etc/profile.d/conda.sh && conda activate testbed; "
         f"{unset_proxy}"
         f"cd {repo_directory} && {test_exec}"
     )
@@ -552,70 +412,12 @@ def grade_test_results(
     }
     
     
-    def normalize_test_name(test_name: str) -> str:
-        """
-        Normalize test name to enable matching between different formats.
-        Converts: tests/Console/MetaCommand/MetaCommandTest.php::testCommand
-        To: MetaCommandTest::testCommand
-        
-        Also handles: Barryvdh\LaravelIdeHelper\Tests\Console\MetaCommand\MetaCommandTest::testCommand
-        To: MetaCommandTest::testCommand
-        """
-        if '::' in test_name:
-            path_part, method = test_name.rsplit('::', 1)
-        else:
-            return test_name
-        
-        # Handle file path format: tests/Console/MetaCommand/MetaCommandTest.php
-        if '.php' in path_part:
-            # Extract class name from file path
-            class_name = path_part.split('/')[-1].replace('.php', '')
-        # Handle class name format: Barryvdh\LaravelIdeHelper\Tests\Console\MetaCommand\MetaCommandTest
-        elif '\\' in path_part:
-            class_name = path_part.split('\\')[-1]
-        else:
-            class_name = path_part.split('/')[-1] if '/' in path_part else path_part
-        
-        return f"{class_name}::{method}"
-    
-    def test_names_match(expected: str, actual: str) -> bool:
-        """Check if two test names match, handling different formats."""
-        # Exact match
-        if expected == actual:
-            return True
-        # Substring match
-        if expected in actual or actual in expected:
-            return True
-        # Normalized match
-        norm_expected = normalize_test_name(expected)
-        norm_actual = normalize_test_name(actual)
-        if norm_expected == norm_actual:
-            return True
-        # Also check if just the method names match (for edge cases)
-        if '::' in norm_expected and '::' in norm_actual:
-            _, method_exp = norm_expected.rsplit('::', 1)
-            _, method_act = norm_actual.rsplit('::', 1)
-            class_exp = norm_expected.split('::')[0]
-            class_act = norm_actual.split('::')[0]
-            # Match if method same AND class name contained in each other
-            if method_exp == method_act and (class_exp in class_act or class_act in class_exp):
-                return True
-        return False
-    
-    # Build a set of all failed/error test names for quick lookup
-    failed_or_error_tests = set()
-    for result_test, status in test_status_map.items():
-        if status in (TestStatus.FAILED, TestStatus.ERROR):
-            failed_or_error_tests.add(result_test)
-            # Also add normalized version
-            failed_or_error_tests.add(normalize_test_name(result_test))
-    
     # Grade F2P tests (should now pass)
     for test in fail_to_pass:
         matched = False
         for result_test, status in test_status_map.items():
-            # Check various matching strategies
-            if test_names_match(test, result_test):
+            # Check exact match or substring match
+            if test == result_test or test in result_test or result_test in test:
                 if status == TestStatus.PASSED:
                     results['fail_to_pass_success'].append(test)
                 else:
@@ -624,25 +426,15 @@ def grade_test_results(
                 break
         
         if not matched:
-            # For PHPUnit standard output, tests not in error/failure section are assumed to pass
-            # Check if this test is in the failed/error set
-            norm_test = normalize_test_name(test)
-            is_failed = any(test_names_match(test, f) for f in failed_or_error_tests)
-            
-            if is_failed:
-                logger.info(f"F2P test matched as failed/error: {test}")
-                results['fail_to_pass_failed'].append(test)
-            else:
-                # Test not found in any failure section - assume passed (for standard PHPUnit output)
-                logger.info(f"F2P test not in error/failure section, assuming passed: {test}")
-                results['fail_to_pass_success'].append(test)
+            logger.warning(f"F2P test not found in output: {test}")
+            results['fail_to_pass_failed'].append(test)
     
     # Grade P2P tests (should still pass)
     # XFAIL and XPASS are acceptable for P2P (not regressions)
     for test in pass_to_pass:
         matched = False
         for result_test, status in test_status_map.items():
-            if test_names_match(test, result_test):
+            if test == result_test or test in result_test or result_test in test:
                 if status in passing_statuses or status == TestStatus.SKIPPED:
                     results['pass_to_pass_success'].append(test)
                 else:
@@ -651,17 +443,9 @@ def grade_test_results(
                 break
         
         if not matched:
-            # For PHPUnit standard output, tests not in error/failure section are assumed to pass
-            norm_test = normalize_test_name(test)
-            is_failed = any(test_names_match(test, f) for f in failed_or_error_tests)
-            
-            if is_failed:
-                logger.info(f"P2P test matched as failed/error: {test}")
-                results['pass_to_pass_failed'].append(test)
-            else:
-                # Test not found in failure section - assume passed
-                logger.info(f"P2P test not in error/failure section, assuming passed: {test}")
-                results['pass_to_pass_success'].append(test)
+            # P2P test not found - might be skipped, count as failed for safety
+            logger.warning(f"P2P test not found in output: {test}")
+            results['pass_to_pass_failed'].append(test)
     
     return results
 
@@ -776,7 +560,10 @@ def evaluate_instance(
         # Step 1: Load trajectory
         logger.info(f"Loading trajectory from {trajectory_file}")
         with open(trajectory_file, 'r') as f:
-            trajectory = json.loads(f.readline())
+            # All corrected delivery trajectories are single JSON objects (formatted or compact)
+            # Just read and parse the entire file
+            content = f.read().strip()
+            trajectory = json.loads(content)
         
         instance_id = trajectory.get('instance_id', 'unknown')
         model_patch = extract_model_patch(trajectory)
@@ -787,41 +574,24 @@ def evaluate_instance(
         # Step 2: Load dataset
         logger.info(f"Loading dataset from {dataset_file}")
         with open(dataset_file, 'r') as f:
-            for line in f:
-                if line.strip():
-                    dataset = json.loads(line)
-                    if dataset.get('instance_id') == instance_id:
-                        break
-            else:
-                raise ValueError(f"Instance {instance_id} not found in dataset")
+            # Datasets are single JSON objects (formatted or compact), not JSONL
+            # Just read and parse the entire file (same as trajectory loading)
+            content = f.read().strip()
+            dataset = json.loads(content)
+
+            # Verify instance ID matches
+            if dataset.get('instance_id') != instance_id:
+                raise ValueError(f"Instance ID mismatch: expected {instance_id}, got {dataset.get('instance_id')}")
         
         # FIX: Use trajectory's instance field as primary source, fallback to dataset
         # The trajectory's instance field contains complete data from OpenHands
         traj_instance = trajectory.get('instance', {})
-        
-        # Parse fields - prefer trajectory instance over dataset file
-        fail_to_pass = traj_instance.get('FAIL_TO_PASS') or dataset.get('FAIL_TO_PASS', [])
-        pass_to_pass = traj_instance.get('PASS_TO_PASS') or dataset.get('PASS_TO_PASS', [])
-        test_command = traj_instance.get('test_command') or dataset.get('test_command', 'pytest')
-        test_output_parser = traj_instance.get('test_output_parser') or dataset.get('test_output_parser', 'python/parse_log_pytest_v3')
-        test_patch = traj_instance.get('test_patch') or dataset.get('test_patch', '')
-        
-        # #region agent log
-        import ast
-        debug_log_path = "/Users/macbookpro/Desktop/SWETEs7/.cursor/debug.log"
-        def _debug_log(msg, data, hyp):
-            import time
-            try:
-                with open(debug_log_path, 'a') as f:
-                    f.write(json.dumps({"timestamp": int(time.time()*1000), "message": msg, "data": data, "hypothesisId": hyp, "location": "eval_pilot2_standardized.py:565"}) + '\n')
-            except: pass
-        _debug_log("F2P raw value", {"type": str(type(fail_to_pass)), "first_100": str(fail_to_pass)[:100], "is_string": isinstance(fail_to_pass, str)}, "A")
-        _debug_log("P2P raw value", {"type": str(type(pass_to_pass)), "first_100": str(pass_to_pass)[:100], "is_string": isinstance(pass_to_pass, str)}, "A")
-        # #endregion
-        
+
         # FIX: Handle both JSON and Python literal formats
         # Some datasets store F2P/P2P as Python literals with single quotes: ['test1', 'test2']
         # json.loads() fails on these, so we fallback to ast.literal_eval()
+        import ast
+
         def _parse_list_field(value):
             """Parse a list field that may be JSON, Python literal, or already a list."""
             if isinstance(value, list):
@@ -843,15 +613,26 @@ def evaluate_instance(
             # Last resort: return empty list
             logger.warning(f"Could not parse list field: {value[:50]}...")
             return []
-        
-        fail_to_pass = _parse_list_field(fail_to_pass)
-        pass_to_pass = _parse_list_field(pass_to_pass)
-        
-        # #region agent log
-        _debug_log("F2P after parse", {"count": len(fail_to_pass), "type": str(type(fail_to_pass)), "first_3": fail_to_pass[:3] if fail_to_pass else []}, "A")
-        _debug_log("P2P after parse", {"count": len(pass_to_pass), "type": str(type(pass_to_pass)), "first_3": pass_to_pass[:3] if pass_to_pass else []}, "A")
-        # #endregion
-        
+
+        # Parse fields from trajectory, but if empty after parsing, use dataset
+        fail_to_pass = _parse_list_field(traj_instance.get('FAIL_TO_PASS'))
+        if not fail_to_pass:  # If trajectory has empty list, fallback to dataset
+            fail_to_pass = _parse_list_field(dataset.get('FAIL_TO_PASS', []))
+
+        pass_to_pass = _parse_list_field(traj_instance.get('PASS_TO_PASS'))
+        if not pass_to_pass:  # If trajectory has empty list, fallback to dataset
+            pass_to_pass = _parse_list_field(dataset.get('PASS_TO_PASS', []))
+
+        # Parse test_command with proper empty string handling
+        test_command = traj_instance.get('test_command') or dataset.get('test_command') or 'pytest'
+        # If test_command is empty string, use default
+        if not test_command or not test_command.strip():
+            test_command = 'pytest --no-header -rA --tb=no -p no:cacheprovider'
+            logger.warning(f"Empty test_command in dataset, using default: {test_command}")
+
+        test_output_parser = traj_instance.get('test_output_parser') or dataset.get('test_output_parser', 'python/parse_log_pytest_v3')
+        test_patch = traj_instance.get('test_patch') or dataset.get('test_patch', '')
+
         logger.info(f"F2P tests: {len(fail_to_pass)}")
         logger.info(f"P2P tests: {len(pass_to_pass)}")
         logger.info(f"Test command: {test_command[:80]}...")
@@ -894,7 +675,7 @@ def evaluate_instance(
             # Try git apply first, then patch
             returncode, stdout, stderr = run_docker_command(
                 container_name,
-                "cd /app/repo && git apply -v /tmp/model.patch 2>&1 || "
+                "cd /testbed && git apply -v /tmp/model.patch 2>&1 || "
                 "patch --batch --fuzz=5 -p1 -i /tmp/model.patch 2>&1"
             )
             
@@ -910,13 +691,13 @@ def evaluate_instance(
         # First, remove any NEW test files created by the model (git clean)
         run_docker_command(
             container_name,
-            "cd /app/repo && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
+            "cd /testbed && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
         )
-        
+
         # Then, restore modified test files to original state (git checkout)
         run_docker_command(
             container_name,
-            "cd /app/repo && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
+            "cd /testbed && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
         )
         
         logger.info("Test files reset complete")
@@ -929,8 +710,11 @@ def evaluate_instance(
         full_output = stdout + stderr
         
         # Step 7: Parse test output using appropriate parser based on test_output_parser
-        parser_func = get_parser(test_output_parser)
-        test_status_map = parser_func(full_output)
+        if 'unittest' in test_output_parser.lower():
+            test_status_map = parse_unittest_output(full_output)
+        else:
+            # Default to pytest parser (handles parse_log_pytest_v3, parse_log_pytest)
+            test_status_map = parse_pytest_output(full_output)
         
         logger.info(f"Parsed {len(test_status_map)} test results")
         
@@ -956,7 +740,7 @@ def evaluate_instance(
             fail_to_pass_failed=grade_results['fail_to_pass_failed'],
             pass_to_pass_success=grade_results['pass_to_pass_success'],
             pass_to_pass_failed=grade_results['pass_to_pass_failed'],
-            test_output=full_output[:50000]  # Limit output size
+            test_output=full_output
         )
         
     except Exception as e:
@@ -1013,23 +797,15 @@ Examples:
     parser.add_argument("--trajectory-file", required=True, help="Path to trajectory output.jsonl")
     parser.add_argument("--dataset-file", required=True, help="Path to dataset JSONL")
     parser.add_argument("--docker-image", required=True, help="Docker image name or path to .tar")
-    parser.add_argument("--output-file", required=True, help="Output file for eval results")
-    parser.add_argument("--output-dir", help="Output directory for eval_outputs structure (defaults to trajectory dir)")
+    parser.add_argument("--output-file", required=False, default=None, help="Output file for eval results (default: eval_output.jsonl beside trajectory file)")
     parser.add_argument("--timeout", type=int, default=900, help="Test timeout in seconds (default: 900)")
     
     args = parser.parse_args()
-    
-    # Determine output directory
-    if args.output_dir:
-        output_dir = args.output_dir
-    else:
-        output_dir = os.path.dirname(args.trajectory_file)
-    
-    # Load dataset to get test_command for eval.sh
-    with open(args.dataset_file, 'r') as f:
-        dataset = json.loads(f.readline())
-    test_command = dataset.get('test_command', 'pytest')
-    
+
+    # Default output file: eval_output.jsonl in the same directory as the trajectory file
+    if args.output_file is None:
+        args.output_file = os.path.join(os.path.dirname(args.trajectory_file), "eval_output.jsonl")
+
     # Run evaluation
     report = evaluate_instance(
         trajectory_file=args.trajectory_file,
@@ -1053,13 +829,16 @@ Examples:
         logger.info(f"Error: {report.error_message}")
     logger.info("=" * 60)
     
-    # Save results (original JSONL format)
+    # Save results
     # Load original trajectory to merge
     with open(args.trajectory_file, 'r') as f:
-        original = json.loads(f.readline())
+        # All corrected delivery trajectories are single JSON objects (formatted or compact)
+        # Just read and parse the entire file
+        content = f.read().strip()
+        original = json.loads(content)
     
     # Add eval details
-    original['pilot2_eval_details'] = asdict(report)
+    original['evaluation_details'] = asdict(report)
     original['resolved'] = report.resolved
     
     with open(args.output_file, 'w') as f:
@@ -1108,141 +887,6 @@ Examples:
             f.write(f"error_message: {report.error_message}\n")
 
     logger.info(f"Results saved to: {args.output_file}")
-    
-    # ============================================================
-    # CREATE EVAL_OUTPUTS DIRECTORY STRUCTURE
-    # ============================================================
-    logger.info("Creating eval_outputs directory structure...")
-    
-    # Create directories
-    eval_outputs_dir = os.path.join(output_dir, 'eval_outputs')
-    instance_eval_dir = os.path.join(eval_outputs_dir, report.instance_id)
-    os.makedirs(instance_eval_dir, exist_ok=True)
-    
-    # 1. Extract and save patch.diff from trajectory
-    git_patch = original.get('test_result', {}).get('git_patch', '')
-    if not git_patch:
-        git_patch = original.get('git_patch', '')
-    patch_file = os.path.join(instance_eval_dir, 'patch.diff')
-    with open(patch_file, 'w') as f:
-        f.write(git_patch)
-    logger.info(f"Created: {patch_file}")
-    
-    # 2. Create report.json (OpenHands format)
-    openhands_report = {
-        report.instance_id: {
-            "patch_is_None": not git_patch,
-            "patch_exists": bool(git_patch),
-            "patch_successfully_applied": not report.failed_apply_patch,
-            "resolved": report.resolved,
-            "tests_status": {
-                "FAIL_TO_PASS": {
-                    "success": report.fail_to_pass_success,
-                    "failure": report.fail_to_pass_failed
-                },
-                "PASS_TO_PASS": {
-                    "success": report.pass_to_pass_success,
-                    "failure": report.pass_to_pass_failed
-                },
-                "FAIL_TO_FAIL": {
-                    "success": [],
-                    "failure": []
-                },
-                "PASS_TO_FAIL": {
-                    "success": [],
-                    "failure": []
-                }
-            }
-        }
-    }
-    report_file = os.path.join(instance_eval_dir, 'report.json')
-    with open(report_file, 'w') as f:
-        json.dump(openhands_report, f, indent=4)
-    logger.info(f"Created: {report_file}")
-    
-    # 3. Save test_output.txt
-    test_output_file = os.path.join(instance_eval_dir, 'test_output.txt')
-    with open(test_output_file, 'w') as f:
-        f.write(report.test_output)
-    logger.info(f"Created: {test_output_file}")
-    
-    # 4. Create run_instance.log (evaluation execution log)
-    run_log_file = os.path.join(instance_eval_dir, 'run_instance.log')
-    run_log_content = f"""Evaluation Log for {report.instance_id}
-{'=' * 60}
-Docker Image: {args.docker_image}
-Timeout: {args.timeout}s
-Resolved: {report.resolved}
-
-Patch Applied: {not report.failed_apply_patch}
-Test Patch Applied: {not report.failed_apply_test_patch}
-Tests Passed: {report.tests_passed}
-Tests Failed: {report.tests_failed}
-Tests Error: {report.tests_error}
-
-FAIL_TO_PASS Success: {report.fail_to_pass_success}
-FAIL_TO_PASS Failed: {report.fail_to_pass_failed}
-PASS_TO_PASS Success: {report.pass_to_pass_success}
-PASS_TO_PASS Failed: {report.pass_to_pass_failed}
-
-{'=' * 60}
-Test Output:
-{'=' * 60}
-{report.test_output}
-"""
-    with open(run_log_file, 'w') as f:
-        f.write(run_log_content)
-    logger.info(f"Created: {run_log_file}")
-    
-    # 5. Create eval.sh (test command used)
-    eval_sh_file = os.path.join(instance_eval_dir, 'eval.sh')
-    eval_sh_content = f"""#!/bin/bash
-# Evaluation script for {report.instance_id}
-# Generated by eval_pilot2_standardized.py
-
-cd /testbed || cd /app/repo || cd /workspace
-
-# Run tests
-{test_command}
-"""
-    with open(eval_sh_file, 'w') as f:
-        f.write(eval_sh_content)
-    os.chmod(eval_sh_file, 0o755)
-    logger.info(f"Created: {eval_sh_file}")
-    
-    # 6. Create aggregate report.json in eval_outputs root
-    aggregate_report_file = os.path.join(eval_outputs_dir, 'report.json')
-    with open(aggregate_report_file, 'w') as f:
-        json.dump(openhands_report, f, indent=4)
-    logger.info(f"Created: {aggregate_report_file}")
-    
-    # 7. Create eval_summary.json in output directory
-    eval_summary = {
-        "total_instances": 1,
-        "resolved_instances": 1 if report.resolved else 0,
-        "unresolved_instances": 0 if report.resolved else 1,
-        "error_instances": 1 if report.error_eval else 0,
-        "results": {
-            report.instance_id: {
-                "resolved": report.resolved,
-                "tests_passed": report.tests_passed,
-                "tests_failed": report.tests_failed,
-                "f2p_success": len(report.fail_to_pass_success),
-                "f2p_total": len(report.fail_to_pass_success) + len(report.fail_to_pass_failed),
-                "p2p_success": len(report.pass_to_pass_success),
-                "p2p_total": len(report.pass_to_pass_success) + len(report.pass_to_pass_failed)
-            }
-        }
-    }
-    eval_summary_file = os.path.join(output_dir, 'eval_summary.json')
-    with open(eval_summary_file, 'w') as f:
-        json.dump(eval_summary, f, indent=4)
-    logger.info(f"Created: {eval_summary_file}")
-    
-    logger.info("=" * 60)
-    logger.info("EVAL_OUTPUTS STRUCTURE CREATED SUCCESSFULLY")
-    logger.info(f"Location: {eval_outputs_dir}")
-    logger.info("=" * 60)
     
     return 0 if report.resolved else 1
 
