@@ -328,8 +328,8 @@ def get_instruction(instance: pd.Series, metadata: EvalMetadata):
 
 
 # SWE-Lancer monolith image configuration
-USE_SWELANCER_MONOLITH = os.environ.get('USE_SWELANCER_MONOLITH', 'false').lower() == 'true'
-SWELANCER_MONOLITH_IMAGE = os.environ.get('SWELANCER_MONOLITH_IMAGE', 'swelancer/swelancer_x86_monolith:releasev1')
+USE_SWELANCER_MONOLITH = os.environ.get('USE_SWELANCER_MONOLITH', 'true').lower() == 'true'
+SWELANCER_MONOLITH_IMAGE = os.environ.get('SWELANCER_MONOLITH_IMAGE', 'swelancer/unified:latest')
 
 if USE_SWELANCER_MONOLITH:
     logger.info(f'SWE-Lancer monolith mode enabled. Using image: {SWELANCER_MONOLITH_IMAGE}')
