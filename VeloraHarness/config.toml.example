@@ -51,7 +51,7 @@ model = "gpt-4o"
 api_key = "${OPENAI_API_KEY}"  # Or set directly: "sk-..."
 temperature = 0.2
 max_input_tokens = 120000
-max_output_tokens = 65536
+max_output_tokens = 16384
 
 [llm.draft_editor]
 correct_num = 5
@@ -102,7 +102,8 @@ llm_config = 'gpt3'
 #base_container_image = "nikolaik/python-nodejs:python3.12-nodejs22"
 
 # Runtime container image (recommended: use pre-built image)
-runtime_container_image = "ghcr.io/openhands/runtime:velora_ready"
+# Commented out to force rebuild with action_execution_server.py
+#runtime_container_image = "ghcr.io/openhands/runtime:oh_v1.1.0_lgwqvepgjj1871lk"
 
 # Use host network
 #use_host_network = false
@@ -137,25 +138,27 @@ attention_window = 50
 
 # GPT-4 / GPT-5 for coding tasks
 [llm.gpt]
-model = "gpt-4o"
-api_key = "YOUR_OPENAI_API_KEY"
-temperature = 0.2
-max_input_tokens = 120000
-max_output_tokens = 65536
+model = "gpt-5.2-codex"
+api_key = "<YOUR_OPENAI_API_KEY>"
+reasoning_effort = "xhigh"
+temperature = 1.0
+timeout = 7200
+num_retries = 8
+retry_min_wait = 15
+retry_max_wait = 120
 
-# Google Gemini
+# Google Gemini 3 Pro with High Reasoning Mode
 [llm.gemini]
-model = "gemini/gemini-2.0-flash"
-api_key = "YOUR_GOOGLE_API_KEY"
-temperature = 0.0
-top_p = 1.0
-max_input_tokens = 1000000
-max_output_tokens = 8192
+model = "gemini/gemini-3-pro-preview"
+api_key = "<YOUR_GOOGLE_API_KEY>"
+temperature = 1.0
 timeout = 600
-custom_llm_provider = "gemini"
-num_retries = 5
-retry_min_wait = 10
-retry_max_wait = 60
+num_retries = 12
+retry_min_wait = 30
+retry_max_wait = 180
+
+[llm.gemini.completion_kwargs]
+thinkingLevel = "high"
 
 # Claude via direct Anthropic API
 [llm.claude]
@@ -187,7 +190,7 @@ api_key = "YOUR_MOONSHOT_API_KEY"
 base_url = "https://api.moonshot.ai/v1"
 temperature = 0.2
 max_input_tokens = 200000
-max_output_tokens = 65536
+max_output_tokens = 16384
 drop_params = true
 native_tool_calling = true
 custom_llm_provider = "openai"

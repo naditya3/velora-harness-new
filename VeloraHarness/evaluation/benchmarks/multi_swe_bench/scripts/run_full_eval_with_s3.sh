@@ -37,140 +37,14 @@ export USE_INSTANCE_IMAGE=true              # Use instance-specific images
 export LANGUAGE=python                      # Our tasks are Python
 export RUN_WITH_BROWSING=false
 export USE_HINT_TEXT=false
+export PYTHONPATH="$(pwd):$PYTHONPATH"    # CRITICAL: Ensure openhands module is found
 
-# ============================================
-# SWE-LANCER CONFIGURATION
-# ============================================
-# Set USE_SWELANCER_MONOLITH=true to use the monolith image for all SWE-Lancer tasks
-# The monolith image contains all tests and can checkout different base commits
-export USE_SWELANCER_MONOLITH=${USE_SWELANCER_MONOLITH:-false}
-export SWELANCER_MONOLITH_IMAGE=${SWELANCER_MONOLITH_IMAGE:-"swelancer/swelancer_x86_monolith:releasev1"}
-
-# ============================================
-# AWS S3 CONFIGURATION
-# ============================================
-# These can be overridden by environment variables
-export S3_BUCKET="${S3_BUCKET:-rfp-coding-q1}"
-export S3_PREFIX="${S3_PREFIX:-Images/RCT}"
-export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
-
-# Note: RUNTIME_CONTAINER_IMAGE="skip" removed - it causes "invalid reference format" errors
-
-# Add current directory to PYTHONPATH for openhands module resolution
-export PYTHONPATH="$(pwd):$PYTHONPATH"
-
-# Activate virtual environment if it exists (for poetry and other tools)
-if [ -f ".venv/bin/activate" ]; then
-  echo "Activating virtual environment..."
-  source .venv/bin/activate
+# Use pre-built runtime image if set, otherwise let OpenHands build
+if [ -z "$RUNTIME_CONTAINER_IMAGE" ]; then
+  # Use our most recent working runtime image
+  export RUNTIME_CONTAINER_IMAGE="ghcr.io/openhands/runtime:oh_v0.62.0_dit46occtvqk1xmv_1q3zwci563qrooux"
 fi
-
-# ============================================
-# PRE-RUN RESOURCE CHECK AND CLEANUP
-# ============================================
-echo "============================================"
-echo "PRE-RUN RESOURCE CHECK AND CLEANUP"
-echo "============================================"
-
-# Function to check available disk space (returns available GB)
-check_disk_space() {
-  local available_kb=$(df -k . | tail -1 | awk '{print $4}')
-  local available_gb=$((available_kb / 1024 / 1024))
-  echo $available_gb
-}
-
-# Function to check available memory (returns available GB)
-check_memory() {
-  local available_kb=$(grep MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
-  local available_gb=$((available_kb / 1024 / 1024))
-  echo $available_gb
-}
-
-# Check disk space before proceeding
-DISK_GB=$(check_disk_space)
-echo "Available disk space: ${DISK_GB}GB"
-
-# Minimum required space: 10GB
-MIN_DISK_GB=10
-
-if [ "$DISK_GB" -lt "$MIN_DISK_GB" ]; then
-  echo "WARNING: Low disk space (${DISK_GB}GB < ${MIN_DISK_GB}GB). Running aggressive cleanup..."
-
-  # Stop all running containers (except critical ones)
-  echo "Stopping all openhands-related containers..."
-  docker ps -q --filter "name=openhands" | xargs -r docker stop 2>/dev/null || true
-  docker ps -q --filter "name=sweb" | xargs -r docker stop 2>/dev/null || true
-
-  # Remove all stopped containers
-  echo "Removing stopped containers..."
-  docker container prune -f 2>/dev/null || true
-
-  # Remove all OpenHands runtime images aggressively
-  echo "Removing OpenHands runtime images..."
-  docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "(ghcr.io/openhands/runtime|openhands-runtime)" | xargs -r docker rmi -f 2>/dev/null || true
-
-  # Remove dangling images
-  echo "Removing dangling images..."
-  docker image prune -f 2>/dev/null || true
-
-  # Remove unused volumes
-  echo "Removing unused volumes..."
-  docker volume prune -f 2>/dev/null || true
-
-  # Run full system prune
-  echo "Running full Docker system prune..."
-  docker system prune -f --volumes 2>/dev/null || true
-
-  # Re-check disk space
-  DISK_GB=$(check_disk_space)
-  echo "Available disk space after cleanup: ${DISK_GB}GB"
-
-  if [ "$DISK_GB" -lt "$MIN_DISK_GB" ]; then
-    echo "ERROR: Still not enough disk space after cleanup (${DISK_GB}GB < ${MIN_DISK_GB}GB)"
-    echo "Please free up disk space manually before running evaluation."
-    exit 1
-  fi
-fi
-
-# Check memory before proceeding
-MEM_GB=$(check_memory)
-echo "Available memory: ${MEM_GB}GB"
-
-# Minimum required memory: 4GB
-MIN_MEM_GB=4
-
-if [ "$MEM_GB" -lt "$MIN_MEM_GB" ]; then
-  echo "WARNING: Low memory (${MEM_GB}GB < ${MIN_MEM_GB}GB). Killing stale processes..."
-
-  # Kill any stale Python/OpenHands processes that might be hogging memory
-  pkill -f "run_infer" 2>/dev/null || true
-  pkill -f "openhands" 2>/dev/null || true
-
-  # Stop any running openhands containers
-  docker ps -q --filter "name=openhands" | xargs -r docker stop 2>/dev/null || true
-
-  # Re-check memory
-  sleep 2
-  MEM_GB=$(check_memory)
-  echo "Available memory after cleanup: ${MEM_GB}GB"
-fi
-
-# Always do a basic cleanup before each run to prevent accumulation
-echo "Running pre-run Docker cleanup..."
-docker container prune -f 2>/dev/null || true
-docker image prune -f 2>/dev/null || true
-
-# Clean up any leftover runtime images from previous runs
-echo "Cleaning up old OpenHands runtime images..."
-OLD_RUNTIME_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "ghcr.io/openhands/runtime" | head -10 || true)
-if [ -n "$OLD_RUNTIME_IMAGES" ]; then
-  echo "Found old runtime images, removing..."
-  echo "$OLD_RUNTIME_IMAGES" | xargs -r docker rmi -f 2>/dev/null || true
-  echo "✓ Old runtime images cleaned up"
-fi
-
-echo "✓ Pre-run checks complete"
-echo ""
+echo "Using RUNTIME_CONTAINER_IMAGE: $RUNTIME_CONTAINER_IMAGE"
 
 # ============================================
 # ARGUMENT PARSING
@@ -414,32 +288,25 @@ echo "============================================"
 echo "DOWNLOADING DOCKER IMAGE"
 echo "============================================"
 
-# Function to download and load image from S3
-download_and_load_from_s3() {
-  local s3_path=$1
-  local local_file=$2
-  
-  echo "Downloading from S3: $s3_path"
-  
-  # Check if file already exists locally
-  if [ -f "$local_file" ]; then
-    echo "✓ Local file already exists: $local_file"
-  else
-    aws s3 cp "$s3_path" "$local_file" --only-show-errors
-    
-    if [ $? -ne 0 ]; then
-      echo "ERROR: Failed to download Docker image from S3"
-      echo "  S3 Path: $s3_path"
-      echo "  Local File: $local_file"
-      echo ""
-      echo "Please verify:"
-      echo "  1. AWS credentials are configured (~/.aws/credentials)"
-      echo "  2. S3 bucket and path are correct"
-      echo "  3. You have read access to the bucket"
-      return 1
-    fi
-    
-    echo "✓ Downloaded $(du -h "$local_file" | cut -f1)"
+# Construct expected image tags for checking
+EXPECTED_TAG1="mswebench/sweb.eval.x86_64.${INSTANCE_ID}:latest"
+EXPECTED_TAG2="mswebench/sweb.eval.x86_64.${INSTANCE_ID}"
+
+# Check if image already exists by checking for the mswebench-tagged version
+if docker images --format "{{.Repository}}:{{.Tag}}" | grep -q "$EXPECTED_TAG1"; then
+  echo "✓ Docker image already loaded: $EXPECTED_TAG1"
+  # Set IMAGE_URI to the local image for subsequent steps
+  IMAGE_URI="$EXPECTED_TAG1"
+elif docker images --format "{{.Repository}}" | grep -q "$EXPECTED_TAG2"; then
+  echo "✓ Docker image already loaded: $EXPECTED_TAG2"
+  IMAGE_URI="$EXPECTED_TAG2:latest"
+else
+  echo "Downloading from S3..."
+  aws s3 cp "$S3_PATH" "$S3_IMAGE_FILE"
+
+  if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to download Docker image from S3"
+    exit 1
   fi
   
   echo "Loading Docker image..."
@@ -560,103 +427,14 @@ echo "Original image: $IMAGE_URI"
 echo "Tag 1: $TAG1"
 echo "Tag 2: $TAG2"
 
-# ============================================
-# SWELANCER MONOLITH IMAGE REUSE OPTIMIZATION
-# ============================================
-# When using SWE-Lancer monolith, we create a single tmux-fixed image
-# and reuse it for ALL instances to avoid rebuilding OpenHands runtime each time.
-# This saves significant time since OpenHands builds runtime based on base image hash.
-
-FIXED_MONOLITH_TAG="mswebench/swelancer_monolith_fixed:latest"
-
-# Function to fix Docker image with tmux
-fix_docker_image_with_tmux() {
-  local SOURCE_IMAGE=$1
-  local TARGET_TAG=$2
-
-  echo "Fixing Docker image: installing tmux..."
-
-  # Create a temporary container
-  CONTAINER_ID=$(docker run -d --entrypoint /bin/bash "$SOURCE_IMAGE" -c "sleep 300")
-
-  # Fix apt sources and install tmux
-  docker exec "$CONTAINER_ID" bash -c '
-    # Fix apt sources for Ubuntu Jammy
-    cat > /etc/apt/sources.list << "EOF"
-deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
-EOF
-    # Clear proxy settings
-    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
-    export http_proxy="" https_proxy=""
-    # Update and install tmux
-    apt-get update && apt-get install -y tmux
-  '
-
-  if [ $? -eq 0 ]; then
-    # Commit the fixed container as a new image
-    docker commit "$CONTAINER_ID" "$TARGET_TAG"
-    echo "✓ Fixed image committed as: $TARGET_TAG"
-  else
-    echo "WARNING: Failed to install tmux, continuing with original image"
-    docker tag "$SOURCE_IMAGE" "$TARGET_TAG"
-  fi
-
-  # Cleanup
-  docker stop "$CONTAINER_ID" >/dev/null 2>&1 || true
-  docker rm "$CONTAINER_ID" >/dev/null 2>&1 || true
-}
-
-# For SWE-Lancer tasks using monolith, check for and reuse a fixed monolith image
-if [ "$IS_SWELANCER" = true ] && [ "$USE_SWELANCER_MONOLITH" = "true" ]; then
-  echo "SWE-Lancer monolith mode: checking for reusable fixed image..."
-  
-  # Check if the fixed monolith image already exists and has tmux
-  if docker run --rm --entrypoint /bin/bash "$FIXED_MONOLITH_TAG" -c "which tmux" >/dev/null 2>&1; then
-    echo "✓ Found existing fixed monolith image: $FIXED_MONOLITH_TAG"
-    echo "  Reusing this image for instance $INSTANCE_ID (saves runtime rebuild time)"
-    
-    # Tag from the fixed monolith (same base image ID = same OpenHands runtime)
-    docker tag "$FIXED_MONOLITH_TAG" "$TAG1"
-    docker tag "$FIXED_MONOLITH_TAG" "$TAG2"
-    echo "✓ Instance tagged from fixed monolith"
-  else
-    echo "Fixed monolith image not found, creating one..."
-    
-    # Check if source has tmux
-    if docker run --rm --entrypoint /bin/bash "$IMAGE_URI" -c "which tmux" >/dev/null 2>&1; then
-      echo "Source image has tmux, using directly..."
-      docker tag "$IMAGE_URI" "$FIXED_MONOLITH_TAG"
-    else
-      echo "Source image missing tmux - fixing and saving as reusable image..."
-      fix_docker_image_with_tmux "$IMAGE_URI" "$FIXED_MONOLITH_TAG"
-    fi
-    
-    # Now tag instance from the fixed monolith
-    docker tag "$FIXED_MONOLITH_TAG" "$TAG1"
-    docker tag "$FIXED_MONOLITH_TAG" "$TAG2"
-    echo "✓ Created fixed monolith and tagged instance"
-  fi
+# Check if TAG1 already exists and has tmux (fixed image)
+if docker run --rm --entrypoint /bin/bash "$TAG1" -c "which tmux" >/dev/null 2>&1; then
+  echo "✓ Fixed image already exists with tmux - skipping re-tag"
 else
-  # Non-SWE-Lancer or non-monolith mode: use original per-instance logic
-  # Check if TAG1 already exists and has tmux (fixed image)
-  if docker run --rm --entrypoint /bin/bash "$TAG1" -c "which tmux" >/dev/null 2>&1; then
-    echo "✓ Fixed image already exists with tmux - skipping re-tag"
-  else
-    # Check if the source image has tmux
-    if docker run --rm --entrypoint /bin/bash "$IMAGE_URI" -c "which tmux" >/dev/null 2>&1; then
-      echo "Source image has tmux, tagging directly..."
-      docker tag "$IMAGE_URI" "$TAG1"
-      docker tag "$IMAGE_URI" "$TAG2"
-      echo "✓ Image tagged successfully"
-    else
-      echo "Source image missing tmux - fixing..."
-      fix_docker_image_with_tmux "$IMAGE_URI" "$TAG1"
-      docker tag "$TAG1" "$TAG2"
-      echo "✓ Fixed image tagged successfully"
-    fi
-  fi
+  echo "Tagging image..."
+  docker tag "$IMAGE_URI" "$TAG1"
+  docker tag "$IMAGE_URI" "$TAG2"
+  echo "✓ Image tagged successfully"
 fi
 
 # Verify tags
@@ -665,17 +443,50 @@ echo "Verifying tags:"
 docker images | grep -E "(${INSTANCE_ID}|${REPO_M})" | head -5
 
 # ============================================
-# CLEAN UP OLD RUNTIME IMAGES (if any)
+# INSTALL TMUX IN BASE IMAGE (Critical Fix)
 # ============================================
 echo ""
-echo "Cleaning up old OpenHands runtime images..."
-OLD_RUNTIME_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep "ghcr.io/openhands/runtime" | head -5 || true)
-if [ -n "$OLD_RUNTIME_IMAGES" ]; then
-  echo "Found old runtime images, removing..."
-  echo "$OLD_RUNTIME_IMAGES" | xargs -r docker rmi -f 2>/dev/null || true
-  echo "✓ Old runtime images cleaned up"
+echo "============================================"
+echo "INSTALLING TMUX IN BASE IMAGE"
+echo "============================================"
+
+# Check if tmux is installed
+if docker run --rm --entrypoint /bin/bash "$TAG1" -c "which tmux" >/dev/null 2>&1; then
+  echo "✓ tmux already installed in image"
 else
-  echo "✓ No old runtime images to clean"
+  echo "Installing tmux in base image..."
+  TMUX_CONTAINER="tmux_install_$$"
+
+  # Detect OS and install tmux using appropriate method
+  docker run --name "$TMUX_CONTAINER" --entrypoint /bin/bash "$TAG1" -c '
+    # Clear any proxy settings that might interfere
+    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+
+    # Try to install tmux using existing repos (works for both Debian and Ubuntu)
+    if command -v apt-get &>/dev/null; then
+      apt-get update 2>/dev/null || true
+      apt-get install -y --no-install-recommends tmux 2>/dev/null && exit 0
+
+      # If that failed, try with --allow-unauthenticated (for GPG issues)
+      apt-get install -y --allow-unauthenticated tmux 2>/dev/null && exit 0
+    fi
+
+    # Fallback: check if tmux binary exists in common locations
+    [ -f /usr/bin/tmux ] && exit 0
+
+    exit 1
+  '
+
+  if [ $? -eq 0 ]; then
+    # Commit the container with tmux installed
+    docker commit "$TMUX_CONTAINER" "$TAG1"
+    docker tag "$TAG1" "$TAG2"  # Re-tag TAG2 as well
+    echo "✓ tmux installed and image updated"
+  else
+    echo "WARNING: tmux installation failed, continuing anyway"
+  fi
+
+  docker rm "$TMUX_CONTAINER" 2>/dev/null || true
 fi
 
 # ============================================
@@ -702,6 +513,39 @@ fi
 echo "EVAL_NOTE: $EVAL_NOTE"
 
 # ============================================
+# CREATE MODIFIED DATASET (remove image_storage_uri)
+# ============================================
+echo ""
+echo "============================================"
+echo "CREATING MODIFIED DATASET"
+echo "============================================"
+
+# Create a temporary dataset with image_storage_uri removed
+# This forces run_infer.py to use the mswebench-prefixed image name
+# which triggers the correct Dockerfile.j2 branch with || true fallbacks
+MODIFIED_DATASET="/tmp/modified_dataset_${INSTANCE_ID}.jsonl"
+
+python3 << PYEOF
+import json
+
+with open("$DATASET_ABS", 'r') as f:
+    data = json.load(f)
+
+# Remove image_storage_uri so run_infer.py uses constructed image name
+if 'image_storage_uri' in data:
+    del data['image_storage_uri']
+    print("Removed image_storage_uri from dataset")
+
+# Write as JSONL (single line, no indentation) for load_dataset compatibility
+with open("$MODIFIED_DATASET", 'w') as f:
+    f.write(json.dumps(data) + '\n')
+
+print(f"Created modified dataset (JSONL): $MODIFIED_DATASET")
+PYEOF
+
+echo "Modified dataset: $MODIFIED_DATASET"
+
+# ============================================
 # PHASE 1: TRAJECTORY GENERATION
 # ============================================
 echo ""
@@ -720,13 +564,13 @@ for i in $(seq 1 $N_RUNS); do
   echo "Starting run $i with eval_note: $current_eval_note"
   echo ""
 
-  INFER_COMMAND="poetry run python evaluation/benchmarks/multi_swe_bench/run_infer.py \
+  INFER_COMMAND="PYTHONPATH=\"$PWD:\$PYTHONPATH\" poetry run python evaluation/benchmarks/multi_swe_bench/run_infer.py \
     --agent-cls $AGENT \
     --llm-config $MODEL_CONFIG \
     --max-iterations $MAX_ITER \
     --eval-num-workers $NUM_WORKERS \
     --eval-note $current_eval_note \
-    --dataset $DATASET_ABS \
+    --dataset $MODIFIED_DATASET \
     --split $SPLIT \
     --eval-n-limit $EVAL_LIMIT"
 

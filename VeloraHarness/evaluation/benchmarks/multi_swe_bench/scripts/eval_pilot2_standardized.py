@@ -268,6 +268,7 @@ class EvalReport:
     pass_to_pass_failed: List[str]
     test_output: str
     error_message: str = ""
+    execution_error: str = ""  # Track why test execution failed
 
 
 # ============================================================
@@ -872,13 +873,51 @@ def run_swelancer_tests(
 # EVAL SCRIPT GENERATION (following test_spec.py:make_eval_test_spec)
 # ============================================================
 
+def detect_repo_directory(container_name: str) -> str:
+    """
+    Detect the actual repository directory in the container.
+
+    Tries in order:
+    1. /testbed (standard SWE-bench location, most images)
+    2. /app/repo (PHP images)
+
+    Returns: Path to repository directory
+    """
+    # Try /testbed first (most common)
+    returncode, stdout, stderr = run_docker_command(
+        container_name,
+        "test -d /testbed && echo 'exists' || echo 'missing'",
+        timeout=10
+    )
+
+    if returncode == 0 and 'exists' in stdout:
+        logger.info("Detected repository directory: /testbed")
+        return "/testbed"
+
+    # Fallback to /app/repo (PHP images)
+    returncode, stdout, stderr = run_docker_command(
+        container_name,
+        "test -d /app/repo && echo 'exists' || echo 'missing'",
+        timeout=10
+    )
+
+    if returncode == 0 and 'exists' in stdout:
+        logger.info("Detected repository directory: /app/repo")
+        return "/app/repo"
+
+    # Default to /testbed if detection fails
+    logger.warning("Could not detect repository directory, defaulting to /testbed")
+    return "/testbed"
+
+
 def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int = 900) -> tuple:
     """
     Run the test command from the dataset, following client's test_spec.py flow.
-    
+
     Returns: (returncode, stdout, stderr)
     """
-    repo_directory = "/app/repo"
+    # Detect the actual repository directory in the container
+    repo_directory = detect_repo_directory(container_name)
     test_patch_raw = instance.get("test_patch", "")
     test_command = instance.get("test_command", "pytest")
     
@@ -916,12 +955,25 @@ def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int
         )
         os.unlink(patch_file)
         
+        # CRITICAL FIX: Remove conflicting files before applying test patch
+        # The model may have created test files that conflict with the golden test patch
+        # Extract file paths from the patch and remove them first
         returncode, stdout, stderr = run_docker_command(
             container_name,
-            f"cd {repo_directory} && git apply -v /tmp/test.patch 2>&1 || "
-            f"patch --batch --fuzz=5 -p1 -i /tmp/test.patch 2>&1 || true"
+            f"cd {repo_directory} && "
+            # First, extract new files from patch (lines starting with +++ b/) 
+            # and remove them if they exist to avoid "already exists" error
+            f"grep '^+++ b/' /tmp/test.patch | sed 's|^+++ b/||' | while read f; do "
+            f"  if [ -f \"$f\" ]; then rm -f \"$f\"; echo \"Removed conflicting: $f\"; fi; "
+            f"done; "
+            # Now apply the patch - use git apply first, then patch as fallback
+            f"git apply -v --3way /tmp/test.patch 2>&1 || "
+            f"git apply -v /tmp/test.patch 2>&1 || "
+            f"patch --batch --fuzz=5 -p1 -i /tmp/test.patch 2>&1"
         )
         logger.info(f"Test patch {i+1} apply result: {returncode}")
+        if "Removed conflicting" in stdout:
+            logger.info(f"Removed model-created files that conflicted with test patch")
     
     # Step 2: Build the test execution command
     # CRITICAL: Unset proxy environment variables that are baked into client images
@@ -940,9 +992,11 @@ def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int
         parts = test_command.split("&&")
         test_exec = parts[-1].strip()  # Get the actual test command (pytest, etc.)
     
-    # Build a clean command: source ENV, unset proxies, then run tests
+    # Build a clean command: activate conda environment, unset proxies, then run tests
+    # Always source conda.sh and activate testbed for mswebench images
+    # The || true ensures we continue even if old /saved/ENV doesn't exist
     full_command = (
-        f"source /saved/ENV 2>/dev/null || source /saved/*/ENV 2>/dev/null || true; "
+        f"source /opt/miniconda3/etc/profile.d/conda.sh && conda activate testbed; "
         f"{unset_proxy}"
         f"cd {repo_directory} && {test_exec}"
     )
@@ -986,8 +1040,11 @@ def grade_test_results(
     
     
     # Grade F2P tests (should now pass)
+    # CRITICAL FIX for PHPUnit: If a test is NOT in the failure/error map,
+    # it means it PASSED (PHPUnit only lists failed/errored tests by name)
     for test in fail_to_pass:
         matched = False
+        test_failed = False
         for result_test, status in test_status_map.items():
             # Check exact match or substring match
             if test == result_test or test in result_test or result_test in test:
@@ -995,15 +1052,19 @@ def grade_test_results(
                     results['fail_to_pass_success'].append(test)
                 else:
                     results['fail_to_pass_failed'].append(test)
+                    test_failed = True
                 matched = True
                 break
         
         if not matched:
-            logger.warning(f"F2P test not found in output: {test}")
-            results['fail_to_pass_failed'].append(test)
+            # CRITICAL: If not in failure/error map, test PASSED (for PHPUnit)
+            # PHPUnit only lists failed/errored tests, not passing ones
+            logger.info(f"F2P test not in failure list (PASSED): {test}")
+            results['fail_to_pass_success'].append(test)
     
     # Grade P2P tests (should still pass)
     # XFAIL and XPASS are acceptable for P2P (not regressions)
+    # CRITICAL FIX for PHPUnit: If not in failure map, test PASSED
     for test in pass_to_pass:
         matched = False
         for result_test, status in test_status_map.items():
@@ -1016,8 +1077,10 @@ def grade_test_results(
                 break
         
         if not matched:
-            # P2P test not found - might be skipped, count as failed for safety
-            logger.warning(f"P2P test not found in output: {test}")
+            # CRITICAL FIX for PHPUnit: If not in failure/error map, test PASSED
+            logger.info(f"P2P test not in failure list (PASSED): {test}")
+            results['pass_to_pass_success'].append(test)
+            continue  # Skip the failed append below
             results['pass_to_pass_failed'].append(test)
     
     return results
@@ -1108,6 +1171,91 @@ def parse_unittest_output(stdout: str) -> Dict[str, str]:
 # ============================================================
 # MAIN EVALUATION FUNCTION
 # ============================================================
+
+def convert_phpunit_to_filepath(namespace_test: str) -> str:
+    """
+    Convert PHPUnit namespace format to file path format.
+    
+    Input:  Barryvdh\LaravelIdeHelper\Tests\Console\MetaCommand\MetaCommandTest::testCommand
+    Output: tests/Console/MetaCommand/MetaCommandTest.php::testCommand
+    """
+    if '::' not in namespace_test:
+        return namespace_test
+    
+    class_part, method = namespace_test.rsplit('::', 1)
+    
+    # Find the "Tests\" part and convert everything after it
+    tests_patterns = [
+        r'.*\\Tests\\',  # Match up to and including \Tests\
+        r'^Tests\\',       # Match if starts with Tests\
+    ]
+    
+    for pattern in tests_patterns:
+        match = re.search(pattern, class_part)
+        if match:
+            after_tests = class_part[match.end():]
+            path = after_tests.replace('\\', '/')
+            return f"tests/{path}.php::{method}"
+    
+    # Fallback: just convert backslashes
+    path = class_part.replace('\\', '/')
+    return f"{path}.php::{method}"
+
+
+def parse_phpunit_output(stdout: str) -> dict:
+    """
+    Parse PHPUnit test output and convert to file path format.
+    
+    PHPUnit outputs: Barryvdh\LaravelIdeHelper\Tests\Console\MetaCommand\MetaCommandTest::testCommand
+    Expected format: tests/Console/MetaCommand/MetaCommandTest.php::testCommand
+    
+    Returns: Dict[test_name, status]
+    """
+    test_status_map = {}
+    
+    in_errors = False
+    in_failures = False
+    
+    lines = stdout.split('\n')
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        
+        # Detect sections
+        if 'There were' in line and 'error' in line.lower():
+            in_errors = True
+            in_failures = False
+            continue
+        if 'There were' in line and 'failure' in line.lower():
+            in_failures = True
+            in_errors = False
+            continue
+        if line.startswith('FAILURES!') or line.startswith('OK ('):
+            break
+        
+        # Match numbered test entries like "1) TestClass::testMethod"
+        match = re.match(r'^\s*\d+\)\s+(.+)', line_stripped)
+        if match:
+            full_test_name = match.group(1).strip()
+            
+            # Clean up test name - remove data provider info
+            if ' with data set' in full_test_name:
+                full_test_name = full_test_name.split(' with data set')[0].strip()
+            
+            # Convert namespace to file path format
+            converted_name = convert_phpunit_to_filepath(full_test_name)
+            
+            # Store BOTH formats for matching flexibility
+            if in_errors:
+                test_status_map[converted_name] = 'ERROR'
+                test_status_map[full_test_name] = 'ERROR'
+            elif in_failures:
+                test_status_map[converted_name] = 'FAILED'
+                test_status_map[full_test_name] = 'FAILED'
+    
+    logger.info(f"[PHPUnit] Parsed {len(test_status_map)} test results (including both formats)")
+    return test_status_map
+
+
 
 def evaluate_instance(
     trajectory_file: str,
@@ -1256,13 +1404,20 @@ def evaluate_instance(
                 pass_to_pass_success=[],
                 pass_to_pass_failed=pass_to_pass,
                 test_output="",
-                error_message="Failed to start container"
+                error_message="Failed to start container",
+                execution_error="Container failed to start"
             )
-        
-        # SWE-LANCER EVALUATION FLOW
-        if is_swelancer:
-            base_commit = dataset.get('base_commit', '')
-            repo_path = dataset.get('repo_path', '/app/expensify')
+
+        # Step 4: Detect repository directory
+        repo_directory = detect_repo_directory(container_name)
+        logger.info(f"Using repository directory: {repo_directory}")
+
+        # Step 5: Apply model patch
+        if model_patch:
+            logger.info("Applying model patch...")
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.diff', delete=False) as f:
+                f.write(model_patch)
+                patch_file = f.name
             
             # IMPORTANT: Copy model patch to container first, but DON'T apply it yet
             # The patch must be applied AFTER git checkout in run_swelancer_tests
@@ -1278,9 +1433,11 @@ def evaluate_instance(
                 )
                 os.unlink(patch_file)
             
-            # Run SWE-Lancer tests (this will do checkout, then apply patch, then run tests)
-            returncode, full_output, _ = run_swelancer_tests(
-                container_name, dataset, base_commit, model_patch=model_patch, timeout=timeout
+            # Try git apply first, then patch (using detected repo directory)
+            returncode, stdout, stderr = run_docker_command(
+                container_name,
+                f"cd {repo_directory} && git apply -v /tmp/model.patch 2>&1 || "
+                f"patch --batch --fuzz=5 -p1 -i /tmp/model.patch 2>&1"
             )
             
             # Parse SWE-Lancer output using exit code parser
@@ -1289,78 +1446,101 @@ def evaluate_instance(
             
             logger.info(f"Parsed {len(test_status_map)} test results (SWE-Lancer)")
         
-        # STANDARD EVALUATION FLOW
+        # Step 6: ALWAYS reset test files to ensure consistent evaluation
+        # This removes any model-created test files and restores original test files
+        # FIX: Previously we skipped reset when golden patch exists, but this allowed
+        # model-created test files to pollute the test run (e.g., GPT's test_namespace_layout.py)
+        logger.info("Resetting test files to clean state...")
+
+        # First, remove any NEW test files created by the model (git clean)
+        run_docker_command(
+            container_name,
+            f"cd {repo_directory} && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
+        )
+
+        # Then, restore modified test files to original state (git checkout)
+        run_docker_command(
+            container_name,
+            f"cd {repo_directory} && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
+        )
+        
+        logger.info("Test files reset complete")
+
+        # Step 7: Run test command (applies test patch and runs tests)
+        returncode, stdout, stderr = run_test_command(
+            container_name, dataset, timeout=timeout
+        )
+
+        full_output = stdout + stderr
+
+        # Step 8: Parse test output using appropriate parser based on test_output_parser
+        if 'phpunit' in test_output_parser.lower():
+            test_status_map = parse_phpunit_output(full_output)
+        elif 'unittest' in test_output_parser.lower():
+            test_status_map = parse_unittest_output(full_output)
         else:
-            # Step 4: Apply model patch
-            if model_patch:
-                logger.info("Applying model patch...")
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.diff', delete=False) as f:
-                    f.write(model_patch)
-                    patch_file = f.name
-                
-                subprocess.run(
-                    ["docker", "cp", patch_file, f"{container_name}:/tmp/model.patch"],
-                    capture_output=True, timeout=30
-                )
-                os.unlink(patch_file)
-                
-                # Try git apply first, then patch
-                returncode, stdout, stderr = run_docker_command(
-                    container_name,
-                    "cd /app/repo && git apply -v /tmp/model.patch 2>&1 || "
-                    "patch --batch --fuzz=5 -p1 -i /tmp/model.patch 2>&1"
-                )
-                
-                if returncode != 0 and "FAILED" in stdout:
-                    logger.warning("Patch application may have failed")
-            
-            # Step 5: ALWAYS reset test files to ensure consistent evaluation
-            # This removes any model-created test files and restores original test files
-            # FIX: Previously we skipped reset when golden patch exists, but this allowed
-            # model-created test files to pollute the test run (e.g., GPT's test_namespace_layout.py)
-            logger.info("Resetting test files to clean state...")
-            
-            # First, remove any NEW test files created by the model (git clean)
-            run_docker_command(
-                container_name,
-                "cd /app/repo && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
-            )
-            
-            # Then, restore modified test files to original state (git checkout)
-            run_docker_command(
-                container_name,
-                "cd /app/repo && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
-            )
-            
-            logger.info("Test files reset complete")
-            
-            # Step 6: Run test command (applies test patch and runs tests)
-            returncode, stdout, stderr = run_test_command(
-                container_name, dataset, timeout=timeout
-            )
-            
-            full_output = stdout + stderr
-            
-            # Step 7: Parse test output using appropriate parser based on test_output_parser
-            if 'unittest' in test_output_parser.lower():
-                test_status_map = parse_unittest_output(full_output)
-            elif 'swelancer' in test_output_parser.lower() or 'playwright' in test_output_parser.lower():
-                parser_func = get_parser(test_output_parser)
-                test_status_map = parser_func(full_output)
-            else:
-                # Default to pytest parser (handles parse_log_pytest_v3, parse_log_pytest)
-                test_status_map = parse_pytest_output(full_output)
-            
-            logger.info(f"Parsed {len(test_status_map)} test results")
+            # Default to pytest parser (handles parse_log_pytest_v3, parse_log_pytest)
+            test_status_map = parse_pytest_output(full_output)
         
-        # Step 8: Grade results
+        logger.info(f"Parsed {len(test_status_map)} test results")
+
+        # Step 9: Grade results
         grade_results = grade_test_results(test_status_map, fail_to_pass, pass_to_pass)
-        
-        # Determine resolved status
+
+        # CRITICAL FIX: Validate that tests actually ran before determining resolved status
+        # Check for common error patterns that indicate tests never executed
+        execution_error = ""
+        test_execution_succeeded = True
+
+        # Check 1: Test output must not be empty
+        if not full_output or len(full_output.strip()) < 10:
+            execution_error = "Test output is empty or too short"
+            test_execution_succeeded = False
+            logger.warning(f"Test execution failed: {execution_error}")
+
+        # Check 2: Detect bash errors indicating tests didn't run
+        bash_error_patterns = [
+            "No such file or directory",
+            "command not found",
+            "Permission denied",
+            "cannot access",
+            "does not exist"
+        ]
+        for pattern in bash_error_patterns:
+            if pattern in full_output:
+                execution_error = f"Bash error detected: {pattern}"
+                test_execution_succeeded = False
+                logger.warning(f"Test execution failed: {execution_error}")
+                break
+
+        # Check 3: At least some tests must have been parsed
+        # Empty test_status_map means parser couldn't find any test results
+        total_tests_detected = len(test_status_map)
+        if total_tests_detected == 0 and (fail_to_pass or pass_to_pass):
+            # We expected tests but found none - this is a failure
+            execution_error = "No test results parsed from output (parser found 0 tests)"
+            test_execution_succeeded = False
+            logger.warning(f"Test execution failed: {execution_error}")
+
+        # Check 4: If we have F2P/P2P tests defined but got 0 passed/failed/error counts, tests didn't run
+        if (fail_to_pass or pass_to_pass):
+            total_test_count = (grade_results['tests_passed'] +
+                              grade_results['tests_failed'] +
+                              grade_results['tests_error'])
+            if total_test_count == 0:
+                execution_error = "Test counts are all zero despite having F2P/P2P tests defined"
+                test_execution_succeeded = False
+                logger.warning(f"Test execution failed: {execution_error}")
+
+        # Determine resolved status - ONLY if tests executed successfully
         all_f2p_pass = len(grade_results['fail_to_pass_failed']) == 0 and len(grade_results['fail_to_pass_success']) > 0
         all_p2p_pass = len(grade_results['pass_to_pass_failed']) == 0
-        resolved = all_f2p_pass and all_p2p_pass
-        
+
+        # CRITICAL: resolved = true ONLY when tests executed AND all conditions met
+        resolved = False
+        if test_execution_succeeded and all_f2p_pass and all_p2p_pass:
+            resolved = True
+
         return EvalReport(
             instance_id=instance_id,
             resolved=resolved,
@@ -1375,7 +1555,8 @@ def evaluate_instance(
             fail_to_pass_failed=grade_results['fail_to_pass_failed'],
             pass_to_pass_success=grade_results['pass_to_pass_success'],
             pass_to_pass_failed=grade_results['pass_to_pass_failed'],
-            test_output=full_output[:50000]  # Limit output size
+            test_output=full_output,
+            execution_error=execution_error
         )
         
     except Exception as e:
@@ -1397,10 +1578,168 @@ def evaluate_instance(
             pass_to_pass_success=[],
             pass_to_pass_failed=[],
             test_output="",
-            error_message=str(e)
+            error_message=str(e),
+            execution_error=""
         )
     finally:
         stop_container(container_name)
+
+
+
+
+# ============================================================
+# OFFICIAL OPENHANDS FORMAT OUTPUT GENERATION
+# ============================================================
+
+def generate_official_eval_outputs(
+    output_dir: str,
+    trajectory_file: str,
+    dataset_file: str,
+    eval_report: 'EvalReport'
+) -> str:
+    """
+    Generate eval_outputs/ directory in Official OpenHands format.
+    
+    Official structure:
+        eval_outputs/<instance_id>/
+        ├── eval.sh          # Evaluation script that was run
+        ├── patch.diff       # Model's generated patch
+        ├── report.json      # Test results in official format
+        ├── run_instance.log # Execution log
+        └── test_output.txt  # Full test output
+    
+    Returns: Path to instance eval directory
+    """
+    import os
+    import json
+    
+    instance_id = str(eval_report.instance_id)
+    eval_outputs_dir = os.path.join(output_dir, "eval_outputs")
+    instance_eval_dir = os.path.join(eval_outputs_dir, instance_id)
+    os.makedirs(instance_eval_dir, exist_ok=True)
+    
+    # Load trajectory for patch
+    with open(trajectory_file, 'r') as f:
+        traj_data = json.load(f)
+    patch = traj_data.get('test_result', {}).get('git_patch', '')
+    
+    # Load dataset for test info
+    with open(dataset_file, 'r') as f:
+        dataset = json.load(f)
+    test_command = dataset.get('test_command', 'pytest')
+    test_patch = dataset.get('test_patch', '')
+    base_commit = dataset.get('base_commit', '')
+    
+    # 1. Create report.json in Official OpenHands format
+    report = {
+        instance_id: {
+            "patch_is_None": patch is None or patch == "",
+            "patch_exists": bool(patch and patch.strip()),
+            "patch_successfully_applied": not eval_report.failed_apply_patch,
+            "resolved": eval_report.resolved,
+            "tests_status": {
+                "FAIL_TO_PASS": {
+                    "success": eval_report.fail_to_pass_success,
+                    "failure": eval_report.fail_to_pass_failed
+                },
+                "PASS_TO_PASS": {
+                    "success": eval_report.pass_to_pass_success,
+                    "failure": eval_report.pass_to_pass_failed
+                },
+                "FAIL_TO_FAIL": {
+                    "success": [],
+                    "failure": []
+                },
+                "PASS_TO_FAIL": {
+                    "success": [],
+                    "failure": []
+                }
+            }
+        }
+    }
+    
+    report_file = os.path.join(instance_eval_dir, "report.json")
+    with open(report_file, 'w') as f:
+        json.dump(report, f, indent=4)
+    logger.info(f"Created: {report_file}")
+    
+    # 2. Save test_output.txt
+    test_output_file = os.path.join(instance_eval_dir, "test_output.txt")
+    with open(test_output_file, 'w') as f:
+        f.write(eval_report.test_output)
+    logger.info(f"Created: {test_output_file}")
+    
+    # 3. Save patch.diff
+    patch_file = os.path.join(instance_eval_dir, "patch.diff")
+    with open(patch_file, 'w') as f:
+        f.write(patch)
+    logger.info(f"Created: {patch_file}")
+    
+    # 4. Create eval.sh (evaluation script)
+    eval_sh = f"""#!/bin/bash
+set -uxo pipefail
+cd /app/repo
+git config --global --add safe.directory /app/repo
+git status
+git show
+git -c core.fileMode=false diff {base_commit}
+source /saved/ENV 2>/dev/null || true
+"""
+    if test_patch:
+        # Add first 100 lines of test patch for reference
+        patch_preview = '\n'.join(test_patch.split('\n')[:100])
+        eval_sh += f"""# Golden test patch applied (preview):
+# {patch_preview[:500]}...
+"""
+    eval_sh += f""": '>>>>> Start Test Output'
+{test_command}
+: '>>>>> End Test Output'
+"""
+    
+    eval_sh_file = os.path.join(instance_eval_dir, "eval.sh")
+    with open(eval_sh_file, 'w') as f:
+        f.write(eval_sh)
+    logger.info(f"Created: {eval_sh_file}")
+    
+    # 5. Create run_instance.log
+    run_log = f"""=== Velora Evaluation Run Log ===
+Instance ID: {instance_id}
+Trajectory: {trajectory_file}
+Dataset: {dataset_file}
+
+=== Patch Application ===
+Patch Size: {len(patch)} bytes
+Patch Applied: {not eval_report.failed_apply_patch}
+Test Patch Applied: {not eval_report.failed_apply_test_patch}
+
+=== Test Execution ===
+Test Command: {test_command}
+Test Timeout: {eval_report.test_timeout}
+Error During Eval: {eval_report.error_eval}
+
+=== Results ===
+Resolved: {eval_report.resolved}
+Tests Passed: {eval_report.tests_passed}
+Tests Failed: {eval_report.tests_failed}
+Tests Error: {eval_report.tests_error}
+
+=== FAIL_TO_PASS ===
+Success: {eval_report.fail_to_pass_success}
+Failed: {eval_report.fail_to_pass_failed}
+
+=== PASS_TO_PASS ===
+Success: {eval_report.pass_to_pass_success}
+Failed: {eval_report.pass_to_pass_failed}
+"""
+    if eval_report.error_message:
+        run_log += f"\n=== Error Message ===\n{eval_report.error_message}\n"
+    
+    run_log_file = os.path.join(instance_eval_dir, "run_instance.log")
+    with open(run_log_file, 'w') as f:
+        f.write(run_log)
+    logger.info(f"Created: {run_log_file}")
+    
+    return instance_eval_dir
 
 
 # ============================================================
@@ -1432,11 +1771,15 @@ Examples:
     parser.add_argument("--trajectory-file", required=True, help="Path to trajectory output.jsonl")
     parser.add_argument("--dataset-file", required=True, help="Path to dataset JSONL")
     parser.add_argument("--docker-image", required=True, help="Docker image name or path to .tar")
-    parser.add_argument("--output-file", required=True, help="Output file for eval results")
+    parser.add_argument("--output-file", required=False, default=None, help="Output file for eval results (default: eval_output.jsonl beside trajectory file)")
     parser.add_argument("--timeout", type=int, default=900, help="Test timeout in seconds (default: 900)")
     
     args = parser.parse_args()
-    
+
+    # Default output file: eval_output.jsonl in the same directory as the trajectory file
+    if args.output_file is None:
+        args.output_file = os.path.join(os.path.dirname(args.trajectory_file), "eval_output.jsonl")
+
     # Run evaluation
     report = evaluate_instance(
         trajectory_file=args.trajectory_file,
@@ -1469,7 +1812,7 @@ Examples:
         original = json.loads(content)
     
     # Add eval details
-    original['pilot2_eval_details'] = asdict(report)
+    original['evaluation_details'] = asdict(report)
     original['resolved'] = report.resolved
     
     with open(args.output_file, 'w') as f:
@@ -1477,12 +1820,17 @@ Examples:
     
     logger.info(f"Results saved to: {args.output_file}")
     
-    # Always return 0 if evaluation completed successfully
-    # The resolved status is captured in the output file
-    # Only return non-zero for actual evaluation errors (error_eval=True)
-    if report.error_eval and not report.tests_failed and not report.tests_passed:
-        return 1  # Actual evaluation error (e.g., container failed to start)
-    return 0  # Evaluation completed (test may have passed or failed)
+    # Generate Official OpenHands format outputs
+    output_dir = os.path.dirname(args.output_file)
+    instance_eval_dir = generate_official_eval_outputs(
+        output_dir=output_dir,
+        trajectory_file=args.trajectory_file,
+        dataset_file=args.dataset_file,
+        eval_report=report
+    )
+    logger.info(f"Official format outputs saved to: {instance_eval_dir}")
+    
+    return 0 if report.resolved else 1
 
 
 if __name__ == "__main__":

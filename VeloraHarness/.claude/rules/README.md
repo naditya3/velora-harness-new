@@ -196,3 +196,75 @@ cd VeloraHarness
 ---
 
 **All rules are version controlled and team-shared via git.**
+
+
+### **06-fresh-deployment-verified.md** ⭐ NEW
+**Topic:** Complete fresh VeloraHarness deployment (VERIFIED on lancer1)
+**Contains:**
+- Step-by-step fresh deployment process (verified 2026-01-23)
+- All 8 critical requirements with verification
+- Git init + Poetry + PYTHONPATH + datasets setup
+- Complete timeline (35 min total)
+- Actual test results (70KB patch, 101 tests passed)
+- Production-ready deployment commands
+- Comparison: VeloraHarness vs OpenHands+Fixes
+
+**Use when:** Deploying to completely new instance, need verified working process
+**Status:** ✅ TESTED AND VERIFIED on aws-instance-lancer1
+
+---
+
+## **Updated File Checksums (2026-01-23)**
+
+**As of fresh lancer1 verification:**
+
+| File | MD5 Checksum | Status |
+|------|--------------|--------|
+| `run_full_eval_with_s3.sh` | Updated (removed RUNTIME_CONTAINER_IMAGE) | ✅ Fixed |
+| `eval_pilot2_standardized.py` | `c71b963ae19398e900681ec2340da445` | ✅ Same |
+| `docker.py` | `c719fdafa6102198c8068f530846cac3` | ✅ Same |
+| `Dockerfile.j2` | `6edc931ce32b967dd50dc91d7f08551f` | ✅ Same |
+| `build_vscode.py` | (new addition) | ✅ Added |
+
+---
+
+## **Quick Start Guide**
+
+### **For Fresh VeloraHarness Deployment:**
+```bash
+# Read this first:
+cat .claude/rules/06-fresh-deployment-verified.md
+
+# Follow 8-step process
+# Expected: 35 min total (5 min setup + 30 min run)
+```
+
+### **For Deploying Fixes to Existing OpenHands:**
+```bash
+# Read this:
+cat .claude/rules/02-deployment.md
+
+# Copy 4 files
+# Expected: 30 sec deployment + test run
+```
+
+### **For Understanding Requirements:**
+```bash
+# Read critical fixes:
+cat .claude/rules/00-critical-fixes.md
+
+# Now lists 8 requirements (not 4)
+```
+
+---
+
+## **Verification Results**
+
+### **Tested Environments:**
+
+| Instance | Method | Result | Date |
+|----------|--------|--------|------|
+| eval1 | OpenHands + 4 fixes | ✅ SUCCESS (68KB patch) | 2026-01-23 11:38 |
+| lancer1 | Fresh VeloraHarness | ✅ SUCCESS (70KB patch) | 2026-01-23 14:26 |
+
+**Both approaches verified working!**

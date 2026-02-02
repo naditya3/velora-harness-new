@@ -90,16 +90,24 @@ cd ~/SWETEs7/OpenHands  # Or VeloraHarness after Poetry fix
 **ALWAYS set before running:**
 
 ```bash
+export PATH="$HOME/.local/bin:$PATH"        # Poetry in PATH
+export PYTHONPATH="$(pwd):$PYTHONPATH"      # CRITICAL for VeloraHarness imports
 export DOCKER_BUILDKIT=0                    # CRITICAL: Prevents buildx
 export EVAL_DOCKER_IMAGE_PREFIX="mswebench" # Image prefix
 export USE_INSTANCE_IMAGE=true              # Use task images
-export RUNTIME_CONTAINER_IMAGE="skip"       # Skip pre-built runtime
 export LANGUAGE=python                      # Task language
 export RUN_WITH_BROWSING=false
 export USE_HINT_TEXT=false
 ```
 
-**The script sets these internally, but verify if issues occur.**
+**DO NOT SET:**
+```bash
+export RUNTIME_CONTAINER_IMAGE="skip"  # ❌ WRONG - causes Docker to pull "skip" image
+# Let OpenHands build runtime automatically FROM instance image
+```
+
+**The script sets DOCKER_BUILDKIT, EVAL_DOCKER_IMAGE_PREFIX, etc. internally.**
+**You MUST set PYTHONPATH manually for VeloraHarness deployments.**
 
 ---
 
