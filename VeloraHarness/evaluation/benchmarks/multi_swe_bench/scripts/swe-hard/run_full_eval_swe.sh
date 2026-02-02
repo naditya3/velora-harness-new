@@ -5,7 +5,7 @@
 #   1. Downloads Docker image from S3 based on dataset
 #   2. Loads and tags the image for OpenHands
 #   3. Runs trajectory generation (run_infer.py)
-#   4. Runs patch evaluation (eval_pilot2_standardized.py)
+#   4. Runs patch evaluation (eval_standardized_swe.py)
 #   5. Creates OpenHands-format reports
 #
 # Output structure:
@@ -37,6 +37,8 @@ set -eo pipefail
 export DOCKER_BUILDKIT=0                    # CRITICAL: Prevents buildx failures
 export EVAL_DOCKER_IMAGE_PREFIX="mswebench" # Our Docker image prefix
 export USE_INSTANCE_IMAGE=true              # Use instance-specific images
+export USE_SWELANCER_MONOLITH=false         # Disable SWE-Lancer monolith mode (use task-specific images)
+export DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET=24576  # Unlock full 24K thinking budget for Gemini 3 Pro
 # LANGUAGE is now extracted from dataset (supports python, php, go, java, etc.)
 export RUN_WITH_BROWSING=false
 export USE_HINT_TEXT=false
@@ -154,15 +156,20 @@ echo "Base Commit: $BASE_COMMIT"
 echo "Language: $LANGUAGE"
 
 # Handle S3 path - support both full S3 paths and legacy format
+# DIRECT S3 PATH: Supports any S3 bucket (e.g., s3://rfp-coding-q1/Images/SWE-HARD/...)
+# LEGACY FORMAT: Constructs path to s3://kuberha-velora/velora-files/images/
 if [[ "$IMAGE_URI" == s3://* ]]; then
-  # image_storage_uri is already a full S3 path
+  # image_storage_uri is already a full S3 path from any bucket
+  # Examples:
+  #   - s3://rfp-coding-q1/Images/SWE-HARD/shopify__liquid-*.tar
+  #   - s3://kuberha-velora/velora-files/images/*.tar
   S3_PATH="$IMAGE_URI"
   S3_IMAGE_FILE=$(basename "$S3_PATH")
   # For S3 paths, the loaded image name is velora/{instance_id}:base
   LOADED_IMAGE_NAME="velora/${INSTANCE_ID}:base"
   echo "S3 Path (direct): $S3_PATH"
 else
-  # Legacy format: construct S3 path from IMAGE_URI parts
+  # Legacy format: construct S3 path from IMAGE_URI parts (kuberha-velora only)
   REPO_PART=$(echo "$IMAGE_URI" | awk -F'/' '{print $NF}')
   REPO_NAME=$(echo "$REPO_PART" | cut -d':' -f1)
   COMMIT=$(echo "$REPO_PART" | cut -d':' -f2)
@@ -366,6 +373,42 @@ else
   echo "Installing tmux in base image..."
   fix_docker_image_with_tmux "$TAG1" "$TAG1"
   docker tag "$TAG1" "$TAG2"  # Re-tag TAG2 as well
+fi
+
+# ============================================
+# VERIFY LANGUAGE ENVIRONMENT (Ruby/Bundler for Ruby repos)
+# ============================================
+echo ""
+echo "============================================"
+echo "VERIFYING LANGUAGE ENVIRONMENT"
+echo "============================================"
+
+if [ "$LANGUAGE" = "Ruby" ]; then
+  echo "Checking Ruby environment in Docker image..."
+
+  # Check Ruby
+  if docker run --rm --entrypoint /bin/bash "$TAG1" -c "which ruby" >/dev/null 2>&1; then
+    RUBY_VERSION=$(docker run --rm --entrypoint /bin/bash "$TAG1" -c "ruby --version 2>&1" | head -1)
+    echo "✓ Ruby installed: $RUBY_VERSION"
+  else
+    echo "✗ ERROR: Ruby not found in Docker image"
+    echo "The Docker image must have Ruby pre-installed for Ruby projects"
+    exit 1
+  fi
+
+  # Check Bundler
+  if docker run --rm --entrypoint /bin/bash "$TAG1" -c "which bundle" >/dev/null 2>&1; then
+    BUNDLER_VERSION=$(docker run --rm --entrypoint /bin/bash "$TAG1" -c "bundle --version 2>&1" | head -1)
+    echo "✓ Bundler installed: $BUNDLER_VERSION"
+  else
+    echo "✗ ERROR: Bundler not found in Docker image"
+    echo "The Docker image must have Bundler pre-installed for Ruby projects"
+    exit 1
+  fi
+
+  echo "✓ Ruby environment verified successfully"
+else
+  echo "Language: $LANGUAGE (skipping Ruby-specific checks)"
 fi
 
 # ============================================
@@ -573,19 +616,19 @@ fi
 echo ""
 echo "============================================"
 echo "PHASE 2: DETAILED PATCH EVALUATION"
-echo "Using eval_pilot2_standardized.py"
+echo "Using eval_standardized_swe.py"
 echo "============================================"
 
 # Run the detailed evaluation script
-# IMPORTANT: Use the fixed eval_pilot2_standardized.py from multi_swe_bench/scripts/
+# IMPORTANT: Use eval_standardized_swe.py from swe-hard/
 SCRIPT_DIR=$(dirname "$0")
-EVAL_SCRIPT="$SCRIPT_DIR/eval_pilot2_standardized.py"
-EVAL_OUTPUT_FILE="${OUTPUT_DIR}/eval_pilot2_output.jsonl"
+EVAL_SCRIPT="$SCRIPT_DIR/eval_standardized_swe.py"
+EVAL_OUTPUT_FILE="${OUTPUT_DIR}/eval_standardized_output.jsonl"
 
 # Verify eval script exists
 if [ ! -f "$EVAL_SCRIPT" ]; then
   echo "ERROR: Evaluation script not found: $EVAL_SCRIPT"
-  echo "Expected location: evaluation/benchmarks/multi_swe_bench/scripts/eval_pilot2_standardized.py"
+  echo "Expected location: evaluation/benchmarks/multi_swe_bench/scripts/swe-hard/eval_standardized_swe.py"
   exit 1
 fi
 
@@ -614,7 +657,7 @@ if [ $EVAL_EXIT -ne 0 ]; then
   exit $EVAL_EXIT
 fi
 
-# Note: eval_pilot2_standardized.py now creates the full eval_outputs structure:
+# Note: eval_standardized_swe.py now creates the full eval_outputs structure:
 #   eval_outputs/
 #   ├── report.json
 #   └── <instance_id>/

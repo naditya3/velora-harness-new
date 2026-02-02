@@ -318,8 +318,8 @@ run_trajectory() {
   
   # Set RUN_ID environment variable for unique output
   export RUN_ID="$run_num"
-  
-  timeout "$TIMEOUT" bash evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_swe.sh \
+
+  timeout "$TIMEOUT" bash evaluation/benchmarks/multi_swe_bench/scripts/swe-hard/run_full_eval_swe.sh \
     "$model" \
     "$DATASET" \
     1 \

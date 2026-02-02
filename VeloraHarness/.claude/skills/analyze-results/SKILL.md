@@ -11,7 +11,7 @@ Parse and summarize SWE-bench evaluation outputs.
 
 ## Find Latest Results
 ```bash
-EVAL_DIR="${ARGUMENTS:-$(ls -td /home/ec2-user/Jeager/Velora_SWE_Harness/VeloraHarness/evaluation/evaluation_outputs/outputs/*/* 2>/dev/null | head -1)}"
+EVAL_DIR="${ARGUMENTS:-$(ls -td /home/ubuntu/velora/VeloraHarness/evaluation/evaluation_outputs/outputs/*/* 2>/dev/null | head -1)}"
 echo "Analyzing: $EVAL_DIR"
 ```
 

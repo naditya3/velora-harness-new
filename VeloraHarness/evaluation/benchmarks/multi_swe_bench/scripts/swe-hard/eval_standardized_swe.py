@@ -271,12 +271,79 @@ def parse_log_phpunit(log: str, grading_spec: Any = None) -> Dict[str, str]:
     
     return test_status_map
 
+
+def parse_log_ruby_minitest(log: str, grading_spec: Any = None) -> Dict[str, str]:
+    """
+    Parser for test logs generated with Ruby Minitest framework.
+
+    Handles Minitest output format:
+        ClassName::SubClass#test_method = 0.05 s = .
+        ClassName::SubClass#test_method = 0.05 s = F
+        ClassName::SubClass#test_method [PASS]
+        ClassName::SubClass#test_method [FAIL]
+
+    Also handles verbose format:
+        test_method_name (ClassName::SubClass) = 0.01 s = .
+    """
+    test_status_map = {}
+
+    for line in log.split("\n"):
+        line_stripped = line.strip()
+
+        # Primary format: ClassName::SubClass#test_method = 0.05 s = .
+        # Result codes: . (pass), F (fail), E (error), S/N (skip)
+        match = re.match(r'^([\w:]+#[\w]+)\s*=.*?=\s*([.FESN])\s*$', line_stripped)
+        if match:
+            test_name, result = match.groups()
+            if result == '.':
+                test_status_map[test_name] = TestStatus.PASSED
+            elif result == 'F':
+                test_status_map[test_name] = TestStatus.FAILED
+            elif result == 'E':
+                test_status_map[test_name] = TestStatus.ERROR
+            elif result == 'S' or result == 'N':
+                test_status_map[test_name] = TestStatus.SKIPPED
+            continue
+
+        # Alternative format: ClassName::SubClass#test_method [PASS]
+        match = re.match(r'^([\w:]+#[\w]+)\s*\[(\w+)\]', line_stripped)
+        if match:
+            test_name, result = match.groups()
+            result_upper = result.upper()
+            if result_upper in ('PASS', 'OK', 'PASSED'):
+                test_status_map[test_name] = TestStatus.PASSED
+            elif result_upper in ('FAIL', 'FAILED'):
+                test_status_map[test_name] = TestStatus.FAILED
+            elif result_upper in ('ERROR', 'ERR'):
+                test_status_map[test_name] = TestStatus.ERROR
+            elif result_upper in ('SKIP', 'SKIPPED'):
+                test_status_map[test_name] = TestStatus.SKIPPED
+            continue
+
+        # Minitest verbose format: test_method_name (ClassName::SubClass) = 0.01 s = .
+        match = re.match(r'^\s*(\w+)\s*\(([\w:]+)\)\s*=.*?=\s*([.FESN])\s*$', line_stripped)
+        if match:
+            method_name, class_name, result = match.groups()
+            test_name = f"{class_name}#{method_name}"
+            if result == '.':
+                test_status_map[test_name] = TestStatus.PASSED
+            elif result == 'F':
+                test_status_map[test_name] = TestStatus.FAILED
+            elif result == 'E':
+                test_status_map[test_name] = TestStatus.ERROR
+            elif result == 'S' or result == 'N':
+                test_status_map[test_name] = TestStatus.SKIPPED
+
+    return test_status_map
+
 # Parser registry mapping parser names to functions
 PARSER_REGISTRY: Dict[str, Callable] = {
     "python/parse_log_pytest_v3": parse_log_pytest_v3,
     "python/parse_log_pytest": parse_log_pytest_v3,  # Alias
     "python/parse_log_unittest": parse_log_unittest,
     "php/parse_log_phpunit": parse_log_phpunit,
+    "parsers/ruby_minitest_parser.py": parse_log_ruby_minitest,  # Dataset parser path
+    "ruby/parse_log_minitest": parse_log_ruby_minitest,  # Standard alias
 }
 
 
@@ -1065,48 +1132,6 @@ Examples:
     with open(args.output_file, 'w') as f:
         f.write(json.dumps(original) + '\n')
     
-    # Write evals_report artifacts beside output.jsonl
-    evals_report_dir = os.path.join(os.path.dirname(args.output_file), "evals_report")
-    os.makedirs(evals_report_dir, exist_ok=True)
-
-    model_patch = extract_model_patch(original)
-
-    report_payload = {
-        "instance_id": report.instance_id,
-        "resolved": report.resolved,
-        "tests_passed": report.tests_passed,
-        "tests_failed": report.tests_failed,
-        "tests_error": report.tests_error,
-        "fail_to_pass_success": report.fail_to_pass_success,
-        "fail_to_pass_failed": report.fail_to_pass_failed,
-        "pass_to_pass_success": report.pass_to_pass_success,
-        "pass_to_pass_failed": report.pass_to_pass_failed,
-        "error_eval": report.error_eval,
-        "failed_apply_patch": report.failed_apply_patch,
-        "failed_apply_test_patch": report.failed_apply_test_patch,
-        "test_timeout": report.test_timeout,
-        "error_message": report.error_message,
-    }
-
-    with open(os.path.join(evals_report_dir, "report.json"), "w") as f:
-        json.dump(report_payload, f, indent=2)
-
-    with open(os.path.join(evals_report_dir, "patch.diff"), "w") as f:
-        f.write(model_patch or "")
-
-    with open(os.path.join(evals_report_dir, "test_output.txt"), "w") as f:
-        f.write(report.test_output or "")
-
-    with open(os.path.join(evals_report_dir, "run_instance.log"), "w") as f:
-        f.write("eval_pilot2_standardized.py summary\n")
-        f.write(f"instance_id: {report.instance_id}\n")
-        f.write(f"resolved: {report.resolved}\n")
-        f.write(f"tests_passed: {report.tests_passed}\n")
-        f.write(f"tests_failed: {report.tests_failed}\n")
-        f.write(f"tests_error: {report.tests_error}\n")
-        if report.error_message:
-            f.write(f"error_message: {report.error_message}\n")
-
     logger.info(f"Results saved to: {args.output_file}")
     
     # ============================================================

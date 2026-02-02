@@ -32,7 +32,7 @@ export USE_INSTANCE_IMAGE=true
 
 2. **Run trajectory generation**
 ```bash
-cd /home/ec2-user/Jeager/Velora_SWE_Harness/VeloraHarness
+cd /home/ubuntu/velora/VeloraHarness
 
 poetry run python evaluation/benchmarks/multi_swe_bench/run_infer.py \
     --agent-cls CodeActAgent \
@@ -57,5 +57,5 @@ After completion, show:
 
 ## Example Usage
 ```
-/run-eval llm.gpt_codex /home/ec2-user/Jeager/Testing/SWE_Hard/task.jsonl 1
+/run-eval llm.gpt_codex /home/ubuntu/velora/VeloraHarness/data/Shopify/1769848885641113.jsonl 1
 ```
