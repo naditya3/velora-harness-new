@@ -58,6 +58,7 @@ jsonls/
 .eval_sessions/
 data/datasets/
 personal/
+
 # Logs
 *.log
 logs/
