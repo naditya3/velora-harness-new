@@ -1,1 +1,0 @@
-{"id": 14, "timestamp": "2026-01-28T13:55:24.378286", "source": "agent", "message": "Unexpected task format in task_list: <class 'str'>. Each task should be a dictionary.", "observation": "error", "content": "Unexpected task format in task_list: <class 'str'>. Each task should be a dictionary.", "extras": {"error_id": ""}}

@@ -85,3 +85,9 @@ openhands/integrations/vscode/package-lock.json
 
 # Example files from SWE-bench
 evaluation/benchmarks/swe_bench/examples/*.jsonl
+
+# Evaluation sessions (local state)
+.eval_sessions/
+
+# Dataset files (should not be in repo)
+dataset/
