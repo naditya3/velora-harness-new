@@ -232,6 +232,11 @@ class LLM(RetryMixin, DebugMixin):
             # If thinking parameter is present, add to allowed_openai_params to prevent drop_params from filtering
             if 'thinking' in self.config.completion_kwargs:
                 kwargs['allowed_openai_params'] = kwargs.get('allowed_openai_params', []) + ['thinking']
+                # Add interleaved thinking beta header for Claude to enable thinking between tool calls
+                if 'claude-opus-4' in self.config.model or 'claude-sonnet-4' in self.config.model:
+                    kwargs['extra_headers'] = kwargs.get('extra_headers', {})
+                    kwargs['extra_headers']['anthropic-beta'] = 'interleaved-thinking-2025-05-14'
+                    logger.info('[CLAUDE] Enabled interleaved thinking beta header for multi-turn reasoning')
 
         self._completion = partial(
             litellm_completion,
