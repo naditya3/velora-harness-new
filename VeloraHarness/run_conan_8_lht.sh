@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
+#
+# Run (uses LLM_CONFIGS defaults):
+#   ./run_conan_8.sh
+# Run (override/add LLMs via CLI):
+#   ./run_conan_8.sh --llm-config llm.gemini --llm-config llm.gpt
+# Optional dry-run:
+#   ./run_conan_8.sh --dry-run --llm-config llm.gemini
 
 BASE_DIR="/home/ubuntu/Velora_SWE_Harness/VeloraHarness"
 OPENHANDS_DIR="$BASE_DIR/openhands"
@@ -17,7 +24,7 @@ TIMEOUT="900"
 EVAL_NOTE="conan_modified_without_browsing"
 
 DRY_RUN=false
-LLM_CONFIGS=()
+LLM_CONFIGS=("llm.gemini")
 
 usage() {
   cat <<'EOF'
@@ -141,6 +148,23 @@ get_image_storage_uri() {
   python3 -c "import json,sys; print(json.loads(open(sys.argv[1]).read()).get('image_storage_uri',''))" "$dataset_file"
 }
 
+get_test_command() {
+  local dataset_file="$1"
+  python3 - <<PY
+import json
+import sys
+
+with open("$dataset_file", "r") as f:
+    data = json.loads(f.read())
+
+test_command = data.get("test_command")
+if not test_command or not str(test_command).strip():
+    test_command = "pytest --no-header -rA --tb=no -p no:cacheprovider"
+
+print(test_command)
+PY
+}
+
 download_from_s3() {
   local s3_uri="$1"
   local local_path="$2"
@@ -183,7 +207,7 @@ export PYTHONPATH="${site_packages}:${BASE_DIR}"
 
 mkdir -p "$OUTPUT_BASE" "$INSTANCE_LOG_BASE"
 
-for dataset_path in "$DATASETS_DIR"/1769925655665409.jsonl; do
+for dataset_path in "$DATASETS_DIR"/*.jsonl; do
   [[ -f "$dataset_path" ]] || continue
   instance_id="$(basename "$dataset_path" .jsonl)"
   dataset_file="$DATASETS_DIR/${instance_id}.jsonl"
@@ -244,7 +268,7 @@ for dataset_path in "$DATASETS_DIR"/1769925655665409.jsonl; do
 
   for llm_config in "${LLM_CONFIGS[@]}"; do
     llm_folder="$(get_llm_folder_name "$llm_config")"
-    for idx in 1; do
+    for idx in {1..8}; do
       idx_padded="$(printf "%02d" "$idx")"
       run_id="run_${idx_padded}"
       run_note="${EVAL_NOTE}_run_${idx_padded}"
@@ -318,10 +342,10 @@ for dataset_path in "$DATASETS_DIR"/1769925655665409.jsonl; do
 
         evals_report_dir="${model_dir}/evals_report"
         mkdir -p "$evals_report_dir"
-        eval_cmd_str="$(printf '%q ' "${eval_cmd[@]}")"
+        test_command="$(get_test_command "$dataset_file_for_openhands")"
         {
-          echo "# Evaluation script that was run"
-          echo "${eval_cmd_str% }"
+          echo "# Test command from dataset"
+          echo "${test_command}"
         } > "${evals_report_dir}/eval.sh"
         if [[ -f "$eval_log_file" ]]; then
           cp "$eval_log_file" "${evals_report_dir}/run_instance.log"
