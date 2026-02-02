@@ -524,6 +524,32 @@ class AgentController:
             return
 
         elif isinstance(action, AgentFinishAction):
+            # CRITICAL: Prevent premature finishing - require minimum steps
+            # NOTE: state.iteration is DEPRECATED - use iteration_flag.current_value
+            current_iteration = self.state.iteration_flag.current_value
+            min_steps = 3  # Minimum steps before allowing finish
+            
+            if current_iteration < min_steps:
+                self.log(
+                    'warning',
+                    f'Agent tried to finish after only {current_iteration} iterations. '
+                    f'Minimum {min_steps} steps required. Forcing continuation.',
+                )
+                # Create error observation to inform agent it cannot finish yet
+                from openhands.events.observation import ErrorObservation
+                error_obs = ErrorObservation(
+                    content=(
+                        f'Cannot use finish tool yet. You have only completed {current_iteration} '
+                        f'iteration(s), but at least {min_steps} iterations are required. '
+                        'Please continue working on the task, verify your solution, and try again.'
+                    )
+                )
+                self.event_stream.add_event(error_obs, EventSource.AGENT)
+                # Do NOT set state to FINISHED - agent will continue
+                return
+            
+            # If minimum steps met, allow finishing
+            self.log('info', f'Agent finishing after {current_iteration} iterations (minimum {min_steps} met)')
             self.state.outputs = action.outputs
             await self.set_agent_state_to(AgentState.FINISHED)
         elif isinstance(action, AgentRejectAction):

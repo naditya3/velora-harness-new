@@ -137,22 +137,140 @@ grep -A 5 "_parse_list_field" evaluation/benchmarks/multi_swe_bench/scripts/eval
 
 ---
 
+## **Fix #5: build_vscode.py (Required for Poetry Install)**
+
+**File:** `build_vscode.py`
+**Location:** VeloraHarness root directory
+**Source:** Copy from OpenHands
+
+**Required Code:** (114 lines - Poetry build script)
+
+**Why Critical:**
+- Poetry install expects this build script
+- Without it: `poetry install` fails with "can't open file 'build_vscode.py'"
+- With `SKIP_VSCODE_BUILD=1`: Script runs but skips VSCode extension build
+- Allows Poetry to install local openhands/ package as editable
+
+**Solution:**
+```bash
+cp /path/to/OpenHands/build_vscode.py /path/to/VeloraHarness/
+export SKIP_VSCODE_BUILD=1
+poetry install  # Now succeeds
+```
+
+**Verification:**
+```bash
+[ -f build_vscode.py ] && echo "✓ build_vscode.py exists" || echo "✗ MISSING"
+```
+
+---
+
+## **Fix #6: Git Repository (Required for Metadata)**
+
+**Requirement:** VeloraHarness must be initialized as git repository
+
+**Evidence:** `evaluation/utils/shared.py` line 200 (Official OpenHands code)
+```python
+def make_metadata(...):
+    metadata = EvalMetadata(
+        ...
+        git_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD']),
+        ...
+    )
+```
+
+**Why Critical:**
+- No error handling - expects git repo to exist
+- Every run records git commit in metadata.json
+- Without git: Script fails immediately with "fatal: not a git repository"
+
+**Solution:**
+```bash
+cd VeloraHarness
+git init
+git add .
+git commit -m "VeloraHarness deployment"
+```
+
+**Verification:**
+```bash
+git rev-parse HEAD && echo "✓ Git repo initialized" || echo "✗ NOT a git repo"
+```
+
+---
+
+## **Fix #7: PYTHONPATH (Required for VeloraHarness)**
+
+**Requirement:** PYTHONPATH must include VeloraHarness directory
+
+**Evidence:** Verified on lancer1 fresh test
+
+**Why Critical:**
+- Poetry install doesn't add VeloraHarness to sys.path automatically
+- Imports work in interactive shell but fail in scripts
+- `poetry run python evaluation/...run_infer.py` fails without PYTHONPATH
+
+**Solution:**
+```bash
+export PYTHONPATH="$(pwd):$PYTHONPATH"
+```
+
+**Note:** OpenHands doesn't need this (has proper editable install)
+
+**Verification:**
+```bash
+poetry run python -c "import sys; print([p for p in sys.path if 'VeloraHarness' in p])"
+# Should show VeloraHarness path
+```
+
+---
+
+## **Fix #8: datasets Package**
+
+**Requirement:** datasets package must be installed
+
+**Evidence:** Not in poetry.lock, but imported by run_infer.py
+
+**Solution:**
+```bash
+poetry run pip install datasets
+```
+
+**Verification:**
+```bash
+poetry run python -c "import datasets; print('✓')"
+```
+
+---
+
 ## **Deployment Verification Checklist**
 
-Before deploying to any instance, verify ALL 4 fixes:
+Before deploying to any instance, verify ALL requirements:
 
 ```bash
-# Check docker.py has DOCKER_BUILDKIT=0 support
-[ "$(md5 -r openhands/runtime/builder/docker.py | cut -d' ' -f1)" = "c719fdafa6102198c8068f530846cac3" ] && echo "✓ docker.py correct" || echo "✗ docker.py MISMATCH"
+# Fix #1: docker.py DOCKER_BUILDKIT=0 support
+[ "$(md5 -r openhands/runtime/builder/docker.py | cut -d' ' -f1)" = "c719fdafa6102198c8068f530846cac3" ] && echo "✓ docker.py" || echo "✗ docker.py MISMATCH"
 
-# Check Dockerfile.j2 has tmux
-[ "$(md5 -r openhands/runtime/utils/runtime_templates/Dockerfile.j2 | cut -d' ' -f1)" = "6edc931ce32b967dd50dc91d7f08551f" ] && echo "✓ Dockerfile.j2 correct" || echo "✗ Dockerfile.j2 MISMATCH"
+# Fix #2: Dockerfile.j2 tmux
+[ "$(md5 -r openhands/runtime/utils/runtime_templates/Dockerfile.j2 | cut -d' ' -f1)" = "6edc931ce32b967dd50dc91d7f08551f" ] && echo "✓ Dockerfile.j2" || echo "✗ Dockerfile.j2 MISMATCH"
 
-# Check eval_pilot2_standardized.py has fixes
-[ "$(md5 -r evaluation/benchmarks/multi_swe_bench/scripts/eval_pilot2_standardized.py | cut -d' ' -f1)" = "c71b963ae19398e900681ec2340da445" ] && echo "✓ eval_pilot2_standardized.py correct" || echo "✗ eval_pilot2_standardized.py MISMATCH"
+# Fix #3: eval_pilot2_standardized.py dataset parsing
+[ "$(md5 -r evaluation/benchmarks/multi_swe_bench/scripts/eval_pilot2_standardized.py | cut -d' ' -f1)" = "c71b963ae19398e900681ec2340da445" ] && echo "✓ eval_pilot2_standardized.py" || echo "✗ eval_pilot2_standardized.py MISMATCH"
 
-# Check run_full_eval_with_s3.sh exists
-[ "$(md5 -r evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_with_s3.sh | cut -d' ' -f1)" = "fe08d93ed67b76c21e59b9d84e07ba36" ] && echo "✓ run_full_eval_with_s3.sh correct" || echo "✗ run_full_eval_with_s3.sh MISMATCH"
+# Fix #4: run_full_eval_with_s3.sh complete pipeline
+[ -f evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_with_s3.sh ] && echo "✓ run_full_eval_with_s3.sh" || echo "✗ run_full_eval_with_s3.sh MISSING"
+
+# Fix #5: build_vscode.py for Poetry
+[ -f build_vscode.py ] && echo "✓ build_vscode.py" || echo "✗ build_vscode.py MISSING"
+
+# Fix #6: Git repository
+git rev-parse HEAD >/dev/null 2>&1 && echo "✓ Git initialized" || echo "✗ NOT a git repo"
+
+# Fix #7: PYTHONPATH (for VeloraHarness runs)
+[ -n "$PYTHONPATH" ] && echo "✓ PYTHONPATH set" || echo "⚠ PYTHONPATH not set (needed for VeloraHarness)"
+
+# Fix #8: datasets package
+poetry run python -c "import datasets" 2>/dev/null && echo "✓ datasets" || echo "✗ datasets MISSING"
 ```
 
 ---

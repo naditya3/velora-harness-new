@@ -13,10 +13,17 @@ VeloraHarness provides two core capabilities:
 
 ```
 VeloraHarness/
-├── config.toml              # LLM and agent configuration
-├── requirements.txt         # Python dependencies
-├── FILE_MANIFEST.md         # Documentation of included files
 ├── README.md                # This file
+├── config.toml              # LLM and agent configuration
+├── config.toml.example      # Configuration template
+├── requirements.txt         # Python dependencies
+├── pyproject.toml           # Poetry dependencies
+├── poetry.lock              # Dependency lock file
+│
+├── docs/                    # Documentation
+│   ├── SETUP.md             # Setup and installation guide
+│   ├── DEPLOYMENT.md        # AWS deployment guide
+│   └── FILE_MANIFEST.md     # Complete file listing
 │
 ├── openhands/               # Core OpenHands modules (extracted)
 │   ├── agenthub/            # Agent implementations (CodeActAgent, etc.)
@@ -30,17 +37,28 @@ VeloraHarness/
 │   ├── security/            # Security analyzers
 │   └── utils/               # Utility functions
 │
-├── evaluation/
+├── evaluation/              # Evaluation framework
 │   ├── benchmarks/
-│   │   └── multi_swe_bench/
-│   │       ├── run_infer.py        # Trajectory generation script
-│   │       └── eval_infer.py       # SWE-bench evaluation script
-│   └── velora3_eval_multilang.py   # Multi-language evaluation script
+│   │   ├── multi_swe_bench/ # Multi-language SWE-bench
+│   │   ├── swe_bench/       # Original SWE-bench
+│   │   └── client_tasks/    # Client-specific tasks
+│   ├── utils/               # Evaluation utilities
+│   └── velora3_eval_multilang.py  # Multi-language evaluator
+│
+├── scripts/                 # Utility scripts
+│   ├── run_tasks_v2.sh      # Batch task runner
+│   └── verify_aws_consistency.sh  # AWS instance verification
 │
 ├── data/                    # Task datasets (JSONL format)
-├── outputs/                 # Generated trajectories and evaluations
-└── skills/                  # Agent skill definitions
+├── skills/                  # Agent skill definitions
+└── .claude/                 # Claude AI project rules
 ```
+
+## Quick Links
+
+- [Setup Guide](docs/SETUP.md) - Installation and configuration
+- [Deployment Guide](docs/DEPLOYMENT.md) - AWS deployment instructions
+- [File Manifest](docs/FILE_MANIFEST.md) - Complete file listing and methodology
 
 ## Prerequisites
 

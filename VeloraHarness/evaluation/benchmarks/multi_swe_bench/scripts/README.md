@@ -1,875 +1,602 @@
-# Multi-SWE-Bench Evaluation Scripts - Complete Guide
+# VeloraHarness Evaluation Scripts
 
-This document provides comprehensive documentation for the Velora Multi-SWE-Bench evaluation pipeline, including single instance evaluation, batch evaluation across multiple AWS instances, and remote host setup.
-
----
+This directory contains scripts for running complete evaluation pipelines in VeloraHarness. These scripts combine trajectory generation with detailed patch evaluation to produce comprehensive results.
 
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Quick Start](#quick-start)
-3. [Scripts Summary](#scripts-summary)
-4. [Setup Remote Hosts: `setup_remote_hosts.sh`](#setup-remote-hosts-setup_remote_hostssh)
-5. [Single Instance Evaluation: `run_full_eval_with_s3.sh`](#single-instance-evaluation-run_full_eval_with_s3sh)
-6. [Batch Evaluation: `run_batch_eval.sh`](#batch-evaluation-run_batch_evalsh)
-7. [Docker Management](#docker-management)
-8. [Complete Examples](#complete-examples)
-9. [Troubleshooting](#troubleshooting)
-10. [Output Files Reference](#output-files-reference)
+- [Overview](#overview)
+- [Available Scripts](#available-scripts)
+- [When to Use Which Script](#when-to-use-which-script)
+- [Prerequisites](#prerequisites)
+- [Usage Examples](#usage-examples)
+- [Output Structure](#output-structure)
+- [Environment Variables](#environment-variables)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Overview
 
-The Multi-SWE-Bench evaluation pipeline consists of three main scripts:
+VeloraHarness evaluation consists of two phases:
 
-| Script | Purpose | When to Use |
-|--------|---------|-------------|
-| `setup_remote_hosts.sh` | Setup and verify AWS hosts | Before running distributed batch evaluation |
-| `run_full_eval_with_s3.sh` | Single instance evaluation | Testing single instances or local runs |
-| `run_batch_eval.sh` | Batch evaluation orchestrator | Running multiple instances locally or distributed |
+1. **Trajectory Generation**: The agent interacts with the codebase to solve the issue and generates a patch
+2. **Patch Evaluation**: The patch is applied and tested in an isolated Docker environment
 
-### Architecture
+The scripts in this directory automate both phases and produce standardized evaluation reports compatible with SWE-bench and OpenHands formats.
+
+---
+
+## Available Scripts
+
+### 1. `run_full_eval_with_s3.sh`
+
+**Full evaluation pipeline with S3 Docker image download**
+
+- Downloads Docker images from S3 based on dataset configuration
+- Loads and tags images for OpenHands
+- Runs complete evaluation pipeline
+- **Best for**: AWS environments, CI/CD pipelines, first-time task evaluations
+
+### 2. `run_full_eval_local_docker.sh` ⭐ NEW
+
+**Full evaluation pipeline with local Docker images**
+
+- Uses Docker images already available locally
+- No S3 download required
+- Same evaluation pipeline and output structure
+- **Best for**: Development, repeated evaluations, offline environments
+
+### 3. `run_full_eval.sh` / `run_full_eval_fixed.sh`
+
+**Legacy evaluation scripts**
+
+- Older versions with various fixes
+- May not have all latest improvements
+- **Recommended**: Use the S3 or local Docker versions above
+
+### 4. `run_velora_infer.sh`
+
+**Trajectory generation only**
+
+- Runs only Phase 1 (trajectory generation)
+- Does not perform patch evaluation
+- **Use when**: You only need to generate patches without testing
+
+---
+
+## When to Use Which Script
+
+### Use `run_full_eval_with_s3.sh` when:
+
+- ✅ Running evaluations on AWS with S3 access
+- ✅ Evaluating a task for the first time (no local Docker image)
+- ✅ Setting up CI/CD pipelines
+- ✅ You want automatic image download and setup
+- ❌ You're offline or don't have S3 credentials
+- ❌ You're repeatedly evaluating the same task (inefficient to re-download)
+
+### Use `run_full_eval_local_docker.sh` when:
+
+- ✅ Docker images are already built/downloaded locally
+- ✅ Running multiple evaluations on the same task
+- ✅ Development and testing workflows
+- ✅ You're offline or prefer not to use S3
+- ✅ You want faster evaluation cycles
+- ❌ You don't have the Docker image locally yet
+
+### Quick Decision Tree
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         EVALUATION PIPELINE                                  │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌─────────────────────┐                                                     │
-│  │ setup_remote_hosts  │  ← Run FIRST to prepare AWS instances              │
-│  │        .sh          │                                                     │
-│  └──────────┬──────────┘                                                     │
-│             │                                                                │
-│             ▼                                                                │
-│  ┌─────────────────────┐     ┌─────────────────────────────────────────┐   │
-│  │   run_batch_eval    │────▶│  Distributes to multiple AWS hosts      │   │
-│  │        .sh          │     │                                         │   │
-│  └──────────┬──────────┘     │  ┌─────────┐  ┌─────────┐  ┌─────────┐ │   │
-│             │                │  │ Host 0  │  │ Host 1  │  │ Host N  │ │   │
-│             │                │  │(Worker) │  │(Worker) │  │(Worker) │ │   │
-│             │                │  └────┬────┘  └────┬────┘  └────┬────┘ │   │
-│             │                │       │            │            │      │   │
-│             ▼                │       ▼            ▼            ▼      │   │
-│  ┌─────────────────────┐     │  ┌─────────────────────────────────┐   │   │
-│  │ run_full_eval_with  │◀────┴──│   run_full_eval_with_s3.sh     │   │   │
-│  │      _s3.sh         │        │   (runs on each host)          │   │   │
-│  └─────────────────────┘        └─────────────────────────────────┘   │   │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+Do you have the Docker image locally?
+├─ YES → Use run_full_eval_local_docker.sh
+└─ NO
+   ├─ Do you have S3 access?
+   │  ├─ YES → Use run_full_eval_with_s3.sh
+   │  └─ NO → Build the image first, then use run_full_eval_local_docker.sh
+   └─ Or use run_velora_infer.sh (trajectory only, no evaluation)
 ```
 
 ---
 
-## Quick Start
+## Prerequisites
 
-### Option 1: Local Evaluation (Single Machine)
+### Common Requirements (All Scripts)
+
+1. **Poetry environment** with VeloraHarness installed
+2. **Docker** installed and running
+3. **Configuration file**: `config.toml` with LLM settings
+4. **Dataset file**: JSONL file with task specification
+
+### Additional for S3 Script
+
+5. **AWS CLI** configured with credentials
+6. **S3 access** to `s3://kuberha-velora/velora-files/images/`
+
+### Additional for Local Docker Script
+
+5. **Docker image** loaded locally (via `docker load` or `docker build`)
+
+---
+
+## Usage Examples
+
+### Basic Usage
+
+All scripts follow the same parameter structure:
 
 ```bash
-cd /home/ubuntu/Velora_SWE_Harness-4/VeloraHarness
-
-# Run single instance
-./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_with_s3.sh \
-  llm.gemini3 ./dataset/518290527943513.jsonl
-
-# Run all instances in dataset folder (sequential)
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gemini3 \
-  --dataset-dir ./dataset/ \
-  --max-iter 30
+./script_name.sh MODEL_CONFIG DATASET [EVAL_LIMIT] [MAX_ITER] [NUM_WORKERS] [AGENT]
 ```
 
-### Option 2: Distributed Evaluation (Multiple AWS Instances)
-
-```bash
-cd /home/ubuntu/Velora_SWE_Harness-4/VeloraHarness
-
-# Step 1: Setup remote hosts (run once)
-./evaluation/benchmarks/multi_swe_bench/scripts/setup_remote_hosts.sh \
-  --hosts "34.230.26.157,54.89.56.184" \
-  --ssh-key ~/.ssh/velora-us.pem
-
-# Step 2: Run batch evaluation
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gemini3 \
-  --dataset-dir ./dataset/ \
-  --max-iter 30 \
-  --aws-hosts "34.230.26.157,54.89.56.184" \
-  --ssh-key ~/.ssh/velora-us.pem
-```
-
----
-
-## Scripts Summary
-
-### File Locations
-
-```
-VeloraHarness/
-├── evaluation/
-│   └── benchmarks/
-│       └── multi_swe_bench/
-│           └── scripts/
-│               ├── setup_remote_hosts.sh      # Setup AWS hosts
-│               ├── run_full_eval_with_s3.sh   # Single instance eval
-│               ├── run_batch_eval.sh          # Batch orchestrator
-│               ├── eval_pilot2_standardized.py # Patch evaluator
-│               └── README.md                   # This file
-├── dataset/
-│   ├── 518290527943513.jsonl
-│   ├── 538997559166630.jsonl
-│   └── ...
-├── config.toml                                 # LLM API configurations
-└── evaluation/
-    ├── batch_logs/                            # Batch run logs
-    └── evaluation_outputs/                    # Evaluation results
-```
-
----
-
-## Setup Remote Hosts: `setup_remote_hosts.sh`
-
-This script prepares AWS instances for distributed evaluation by checking and fixing common issues.
-
-### What It Does
-
-| Step | Check | Auto-Fix Action |
-|------|-------|-----------------|
-| 1 | SSH connectivity | ❌ Manual fix required |
-| 2 | VeloraHarness directory | ✅ Syncs from local machine |
-| 3 | Evaluation scripts | ✅ Synced with VeloraHarness |
-| 4 | Poetry installation | ✅ Installs Poetry automatically |
-| 5 | Poetry dependencies | ✅ Runs `poetry install` |
-| 6 | Docker access | ✅ Adds user to docker group |
-| 7 | AWS CLI installation | ✅ Installs AWS CLI |
-| 8 | AWS credentials | ✅ Copies from local ~/.aws/ |
-| 9 | config.toml (API keys) | ✅ Syncs from local |
-| 10 | Disk space | ✅ Cleans Docker if low |
-
-### Parameters
+**Parameters:**
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `--hosts` | **Yes** | - | Comma-separated list of AWS hostnames/IPs |
-| `--ssh-key` | **Yes** | - | Path to SSH private key (.pem file) |
-| `--ssh-user` | No | `ubuntu` | SSH username |
-| `--ssh-port` | No | `22` | SSH port |
-| `--remote-path` | No | `/home/ubuntu/Velora_SWE_Harness-4/VeloraHarness` | VeloraHarness path on remote |
-| `--check-only` | No | `false` | Only check, don't fix issues |
-| `--force-sync` | No | `false` | Force re-sync VeloraHarness even if exists |
-| `--skip-poetry-install` | No | `false` | Skip `poetry install` step |
+| `MODEL_CONFIG` | ✅ | - | LLM config from config.toml (e.g., `llm.gpt`, `llm.claude`) |
+| `DATASET` | ✅ | - | Path to task JSONL file |
+| `EVAL_LIMIT` | ❌ | 1 | Number of tasks to evaluate |
+| `MAX_ITER` | ❌ | 30 | Maximum agent iterations |
+| `NUM_WORKERS` | ❌ | 1 | Number of parallel workers |
+| `AGENT` | ❌ | CodeActAgent | Agent class to use |
 
-### Usage Examples
+### Example 1: Evaluate with S3 Download
 
 ```bash
-# Basic setup - check and fix all issues
-./evaluation/benchmarks/multi_swe_bench/scripts/setup_remote_hosts.sh \
-  --hosts "34.230.26.157,54.89.56.184" \
-  --ssh-key ~/.ssh/velora-us.pem
+cd /path/to/VeloraHarness
 
-# Check only - see what issues exist without fixing
-./evaluation/benchmarks/multi_swe_bench/scripts/setup_remote_hosts.sh \
-  --hosts "34.230.26.157,54.89.56.184" \
-  --ssh-key ~/.ssh/velora-us.pem \
-  --check-only
-
-# Force complete re-sync
-./evaluation/benchmarks/multi_swe_bench/scripts/setup_remote_hosts.sh \
-  --hosts "34.230.26.157,54.89.56.184" \
-  --ssh-key ~/.ssh/velora-us.pem \
-  --force-sync
-
-# Setup with custom SSH user and port
-./evaluation/benchmarks/multi_swe_bench/scripts/setup_remote_hosts.sh \
-  --hosts "host1.aws.com,host2.aws.com" \
-  --ssh-key ~/.ssh/my-key.pem \
-  --ssh-user ec2-user \
-  --ssh-port 2222
-```
-
-### Sample Output
-
-```
-============================================
-REMOTE HOST SETUP
-============================================
-Hosts: 34.230.26.157 54.89.56.184
-SSH User: ubuntu
-Remote Path: /home/ubuntu/Velora_SWE_Harness-4/VeloraHarness
-Check Only: false
-Force Sync: false
-
-============================================
-HOST 1/2: 34.230.26.157
-============================================
-  -->  Checking SSH connectivity...
-[SUCCESS] SSH connection OK
-  -->  Checking VeloraHarness installation...
-[WARNING] VeloraHarness not found
-  -->  Syncing VeloraHarness to 34.230.26.157...
-[SUCCESS] VeloraHarness synced
-  -->  Checking Poetry installation...
-[SUCCESS] Poetry installed: Poetry (version 1.8.2)
-  -->  Checking Docker...
-[SUCCESS] Docker is accessible
-  -->  Checking AWS CLI...
-[SUCCESS] AWS CLI installed
-[SUCCESS] AWS credentials configured
-  -->  Checking config.toml...
-[SUCCESS] config.toml exists
-  -->  Checking disk space...
-[SUCCESS] Disk space OK: 45G available (35% used)
-
-[SUCCESS] Host 34.230.26.157: READY (1 issue(s) fixed)
-
-============================================
-SETUP COMPLETE
-============================================
-
-Hosts checked: 2
-Total issues found: 2
-Issues fixed: 2
-Issues remaining: 0
-[SUCCESS] All hosts are ready for batch evaluation!
-
-You can now run:
-  ./run_batch_eval.sh --model llm.gemini3 --dataset-dir ./dataset/ \
-    --aws-hosts "34.230.26.157,54.89.56.184" --ssh-key ~/.ssh/velora-us.pem
-```
-
----
-
-## Single Instance Evaluation: `run_full_eval_with_s3.sh`
-
-This script performs end-to-end evaluation of a single instance.
-
-### Pipeline Flow
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        run_full_eval_with_s3.sh                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  PHASE 1: SETUP                                                              │
-│  ├── Set environment variables (DOCKER_BUILDKIT=0, PYTHONPATH, etc.)        │
-│  ├── Parse arguments (MODEL, DATASET, EVAL_LIMIT, MAX_ITER, etc.)           │
-│  └── Validate inputs                                                         │
-│                                                                              │
-│  PHASE 2: DOCKER IMAGE PREPARATION                                           │
-│  ├── Extract instance_id, image_storage_uri from dataset JSON               │
-│  ├── Download Docker image from S3                                           │
-│  ├── Load image: docker load < image.tar                                    │
-│  ├── Delete .tar file (save disk space)                                     │
-│  ├── Create OpenHands-compatible tags:                                       │
-│  │   ├── TAG1: mswebench/sweb.eval.x86_64.<instance_id>:latest              │
-│  │   └── TAG2: mswebench/<repo>:pr-<instance_id>                            │
-│  ├── Check for tmux, install if missing (required by OpenHands)             │
-│  └── Clean up old runtime images                                            │
-│                                                                              │
-│  PHASE 3: TRAJECTORY GENERATION                                              │
-│  ├── Run: poetry run python run_infer.py                                    │
-│  │   ├── --agent-cls CodeActAgent                                            │
-│  │   ├── --llm-config $MODEL_CONFIG                                          │
-│  │   ├── --max-iterations $MAX_ITER                                          │
-│  │   └── ... other options                                                   │
-│  └── Output: output.jsonl, metadata.json, llm_completions/                  │
-│                                                                              │
-│  PHASE 4: PATCH EVALUATION                                                   │
-│  ├── Run: python3 eval_pilot2_standardized.py                               │
-│  │   ├── --trajectory-file output.jsonl                                      │
-│  │   ├── --dataset-file dataset.jsonl                                        │
-│  │   ├── --docker-image $TAG1                                                │
-│  │   └── --timeout 600                                                       │
-│  └── Output: eval_pilot2_output.jsonl                                       │
-│                                                                              │
-│  PHASE 5: REPORT GENERATION                                                  │
-│  ├── Create report.json (OpenHands format)                                  │
-│  ├── Save test_output.txt                                                   │
-│  ├── Extract patch.diff                                                     │
-│  └── Create run_instance.log                                                │
-│                                                                              │
-│  PHASE 6: POST-RUN CLEANUP                                                   │
-│  ├── Remove TAG1 and TAG2 images                                            │
-│  ├── Remove original source image                                           │
-│  ├── Remove OpenHands runtime images                                        │
-│  └── Prune dangling images                                                  │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Parameters
-
-| Parameter | Position | Required | Default | Description |
-|-----------|----------|----------|---------|-------------|
-| `MODEL_CONFIG` | 1 | **Yes** | - | LLM configuration from config.toml (e.g., `llm.gemini3`, `llm.gpt`, `llm.claude`) |
-| `DATASET` | 2 | **Yes** | - | Path to instance .jsonl file |
-| `EVAL_LIMIT` | 3 | No | `1` | Number of evaluation iterations |
-| `MAX_ITER` | 4 | No | `30` | Maximum agent iterations (LLM calls) |
-| `NUM_WORKERS` | 5 | No | `1` | Parallel workers for trajectory |
-| `AGENT` | 6 | No | `CodeActAgent` | OpenHands agent class |
-
-### Environment Variables Set
-
-| Variable | Value | Purpose |
-|----------|-------|---------|
-| `DOCKER_BUILDKIT` | `0` | **Critical**: Prevents buildx failures |
-| `EVAL_DOCKER_IMAGE_PREFIX` | `mswebench` | Docker image prefix |
-| `USE_INSTANCE_IMAGE` | `true` | Use instance-specific images |
-| `LANGUAGE` | `python` | Task language |
-| `RUN_WITH_BROWSING` | `false` | Disable browser interactions |
-| `USE_HINT_TEXT` | `false` | Disable hints for fair eval |
-| `PYTHONPATH` | `$(pwd):$PYTHONPATH` | Module resolution |
-
-### Usage Examples
-
-```bash
-cd /home/ubuntu/Velora_SWE_Harness-4/VeloraHarness
-
-# Basic usage - minimum required parameters
-./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_with_s3.sh \
-  llm.gemini3 \
-  ./dataset/518290527943513.jsonl
-
-# With custom max iterations (for more complex tasks)
-./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_with_s3.sh \
-  llm.gemini3 \
-  ./dataset/518290527943513.jsonl \
-  1 \
-  50
-
-# Full parameters
+# Evaluate single task with GPT model
 ./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_with_s3.sh \
   llm.gpt \
-  ./dataset/518290527943513.jsonl \
+  data/tasks/python__mypy-11220.jsonl \
+  1 \
+  30 \
+  1
+```
+
+### Example 2: Evaluate with Local Docker
+
+```bash
+cd /path/to/VeloraHarness
+
+# Ensure Docker image exists locally
+docker images | grep mswebench
+
+# Run evaluation
+./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_local_docker.sh \
+  llm.claude \
+  data/tasks/python__mypy-11220.jsonl \
+  1 \
+  50 \
+  1
+```
+
+### Example 3: High-Iteration Evaluation
+
+```bash
+# Allow more agent iterations for complex tasks
+./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_local_docker.sh \
+  llm.gpt \
+  data/tasks/complex_task.jsonl \
   1 \
   100 \
+  1
+```
+
+### Example 4: Multiple Tasks in Parallel
+
+```bash
+# Evaluate 5 tasks with 3 parallel workers
+./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_with_s3.sh \
+  llm.kimi \
+  data/tasks/batch.jsonl \
+  5 \
+  30 \
+  3
+```
+
+### Example 5: Custom Agent
+
+```bash
+# Use a different agent class
+./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_local_docker.sh \
+  llm.claude \
+  data/tasks/python__mypy-11220.jsonl \
   1 \
-  CodeActAgent
-
-# With logging to file
-./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_with_s3.sh \
-  llm.gemini3 \
-  ./dataset/518290527943513.jsonl \
-  2>&1 | tee evaluation_run.log
-```
-
-### Tmux Fix Function
-
-Many Docker images lack tmux (required by OpenHands). The script automatically installs it:
-
-```bash
-fix_docker_image_with_tmux() {
-  # 1. Create temporary container
-  CONTAINER_ID=$(docker run -d --entrypoint /bin/bash "$SOURCE_IMAGE" -c "sleep 300")
-
-  # 2. Fix apt sources for Ubuntu Jammy
-  docker exec "$CONTAINER_ID" bash -c '
-    cat > /etc/apt/sources.list << "EOF"
-deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
-EOF
-    apt-get update && apt-get install -y tmux
-  '
-
-  # 3. Commit as new image
-  docker commit "$CONTAINER_ID" "$TARGET_TAG"
-
-  # 4. Cleanup
-  docker stop "$CONTAINER_ID" && docker rm "$CONTAINER_ID"
-}
+  30 \
+  1 \
+  CustomAgent
 ```
 
 ---
 
-## Batch Evaluation: `run_batch_eval.sh`
+## Output Structure
 
-This script orchestrates evaluation of multiple instances, supporting both local and distributed execution.
-
-### Execution Modes
-
-#### Local Mode (Sequential)
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           LOCAL MODE                                         │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  For each instance in dataset-dir:                                           │
-│  ┌────────────────────────────────────────────────────────────────────────┐ │
-│  │ 1. Pre-run cleanup: docker system prune -f --volumes                  │ │
-│  │                                                                        │ │
-│  │ 2. Run: run_full_eval_with_s3.sh MODEL INSTANCE LIMIT ITER WORKERS    │ │
-│  │                                                                        │ │
-│  │ 3. Track progress in progress.json                                    │ │
-│  │                                                                        │ │
-│  │ 4. Post-run cleanup: docker system prune -f                           │ │
-│  │                                                                        │ │
-│  │ 5. Log to: batch_logs/TIMESTAMP/<instance_id>.log                     │ │
-│  └────────────────────────────────────────────────────────────────────────┘ │
-│                              │                                               │
-│                              ▼                                               │
-│                    [Next Instance]                                           │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-#### Distributed Mode (Parallel)
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        DISTRIBUTED MODE                                      │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  1. VERIFY: Pre-flight check all remote hosts                               │
-│                                                                              │
-│  2. DIVIDE: Round-robin distribution of instances                           │
-│                                                                              │
-│     Given: 10 instances, 3 hosts                                            │
-│                                                                              │
-│     Instance 0  → Host 0    Instance 5  → Host 2                            │
-│     Instance 1  → Host 1    Instance 6  → Host 0                            │
-│     Instance 2  → Host 2    Instance 7  → Host 1                            │
-│     Instance 3  → Host 0    Instance 8  → Host 2                            │
-│     Instance 4  → Host 1    Instance 9  → Host 0                            │
-│                                                                              │
-│     Result:                                                                  │
-│       Host 0: 4 instances (0, 3, 6, 9)                                      │
-│       Host 1: 3 instances (1, 4, 7)                                         │
-│       Host 2: 3 instances (2, 5, 8)                                         │
-│                                                                              │
-│  3. SYNC: Copy assigned .jsonl files to each host                           │
-│                                                                              │
-│  4. LAUNCH: Start worker script on each host (parallel SSH)                 │
-│                                                                              │
-│     ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                    │
-│     │   Host 0    │   │   Host 1    │   │   Host 2    │                    │
-│     │  (Worker)   │   │  (Worker)   │   │  (Worker)   │                    │
-│     ├─────────────┤   ├─────────────┤   ├─────────────┤                    │
-│     │ Instance 0  │   │ Instance 1  │   │ Instance 2  │                    │
-│     │ Instance 3  │   │ Instance 4  │   │ Instance 5  │                    │
-│     │ Instance 6  │   │ Instance 7  │   │ Instance 8  │                    │
-│     │ Instance 9  │   │             │   │             │                    │
-│     └─────────────┘   └─────────────┘   └─────────────┘                    │
-│           │                 │                 │                             │
-│           └────────────┬────┴────────────────┘                             │
-│                        ▼                                                    │
-│  5. MONITOR: Poll for worker completion every 30 seconds                    │
-│                                                                              │
-│  6. COLLECT: Fetch logs and outputs from all hosts                          │
-│                                                                              │
-│  7. AGGREGATE: Create summary.json with combined results                    │
-│                                                                              │
-│  8. CLEANUP: Remove temp files from remote hosts                            │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Parameters
-
-#### Required Parameters
-
-| Parameter | Short | Description |
-|-----------|-------|-------------|
-| `--model` | `-m` | LLM configuration from config.toml |
-| `--dataset-dir` | `-d` | Directory containing .jsonl instance files |
-
-#### Evaluation Parameters
-
-| Parameter | Short | Default | Description |
-|-----------|-------|---------|-------------|
-| `--max-iter` | `-i` | `30` | Maximum agent iterations per instance |
-| `--eval-limit` | `-l` | `1` | Evaluation limit per instance |
-| `--workers` | `-w` | `1` | Workers within each evaluation |
-| `--agent` | `-a` | `CodeActAgent` | OpenHands agent class |
-
-#### AWS Distributed Mode Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `--aws-hosts` | - | Comma-separated AWS hostnames/IPs (enables distributed mode) |
-| `--ssh-key` | - | SSH private key path (**required** with `--aws-hosts`) |
-| `--ssh-user` | `ubuntu` | SSH username |
-| `--ssh-port` | `22` | SSH port |
-| `--remote-path` | `/home/ubuntu/Velora_SWE_Harness-4/VeloraHarness` | VeloraHarness path on remote |
-
-#### Control Parameters
-
-| Parameter | Description |
-|-----------|-------------|
-| `--dry-run` | Preview distribution without executing |
-| `--retry-failed` | Only retry previously failed instances |
-| `--resume-from ID` | Resume from specific instance ID |
-| `--help` | Show help message |
-
-### Usage Examples
-
-```bash
-cd /home/ubuntu/Velora_SWE_Harness-4/VeloraHarness
-
-# Local mode - run all instances sequentially
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gemini3 \
-  --dataset-dir ./dataset/ \
-  --max-iter 30
-
-# Distributed mode - run on 2 AWS instances in parallel
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gemini3 \
-  --dataset-dir ./dataset/ \
-  --max-iter 30 \
-  --aws-hosts "34.230.26.157,54.89.56.184" \
-  --ssh-key ~/.ssh/velora-us.pem
-
-# Dry run - preview distribution without executing
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gemini3 \
-  --dataset-dir ./dataset/ \
-  --aws-hosts "host1,host2,host3" \
-  --dry-run
-
-# Resume from specific instance
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gemini3 \
-  --dataset-dir ./dataset/ \
-  --resume-from "538997559166630"
-
-# With all options
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gpt \
-  --dataset-dir ./dataset/ \
-  --max-iter 100 \
-  --eval-limit 1 \
-  --workers 1 \
-  --agent CodeActAgent \
-  --aws-hosts "host1.aws.com,host2.aws.com,host3.aws.com" \
-  --ssh-key ~/.ssh/my-key.pem \
-  --ssh-user ec2-user \
-  --ssh-port 22 \
-  --remote-path /opt/velora/VeloraHarness
-```
-
-### Pre-Flight Checks (Distributed Mode)
-
-Before syncing files, the script verifies each host:
-
-1. **SSH Connectivity** - Can connect via SSH
-2. **VeloraHarness Directory** - Installation exists
-3. **Evaluation Script** - `run_full_eval_with_s3.sh` exists
-4. **Poetry** - Poetry is installed and in PATH
-5. **Docker** - Docker daemon is accessible
-
-If any check fails, the script aborts with instructions to run `setup_remote_hosts.sh`.
-
----
-
-## Docker Management
-
-### Cleanup Strategy
-
-| Phase | Action | Command |
-|-------|--------|---------|
-| Pre-run (batch) | Remove volumes | `docker system prune -f --volumes` |
-| Pre-run (single) | Remove old runtime images | `docker rmi ghcr.io/openhands/runtime*` |
-| Post-eval | Remove TAG1, TAG2 | `docker rmi -f $TAG1 $TAG2` |
-| Post-eval | Remove source image | `docker rmi -f $IMAGE_URI` |
-| Post-eval | Remove runtime images | `docker rmi ghcr.io/openhands/runtime*` |
-| Post-eval | Prune dangling | `docker image prune -f` |
-| Post-run (batch) | General prune | `docker system prune -f` |
-
-### Docker Images Created
-
-| Image Type | Naming Pattern | Lifecycle |
-|------------|----------------|-----------|
-| Source Image | `<registry>/<repo>:<commit>` | Downloaded from S3, cleaned after eval |
-| TAG1 | `mswebench/sweb.eval.x86_64.<id>:latest` | Created for eval, cleaned after |
-| TAG2 | `mswebench/<repo>:pr-<id>` | Created for eval, cleaned after |
-| Runtime Image | `ghcr.io/openhands/runtime:*` | Created during trajectory, cleaned after |
-
-### Disk Space Requirements
-
-| Operation | Approximate Size |
-|-----------|------------------|
-| Docker image (typical) | 2-5 GB |
-| Runtime image | 1-3 GB |
-| Trajectory output | 10-100 MB |
-| Total per instance (peak) | 5-10 GB |
-
-**Recommendation**: Ensure at least 20 GB free disk space.
-
----
-
-## Complete Examples
-
-### Example 1: First-Time Setup and Batch Run
-
-```bash
-# Navigate to VeloraHarness
-cd /home/ubuntu/Velora_SWE_Harness-4/VeloraHarness
-
-# Step 1: Copy SSH key to server (from your local Mac)
-# Run this on your LOCAL machine, not the server:
-# scp ~/Downloads/velora-us.pem ubuntu@<server-ip>:~/.ssh/
-# Then on server: chmod 600 ~/.ssh/velora-us.pem
-
-# Step 2: Setup remote AWS hosts
-./evaluation/benchmarks/multi_swe_bench/scripts/setup_remote_hosts.sh \
-  --hosts "34.230.26.157,54.89.56.184" \
-  --ssh-key ~/.ssh/velora-us.pem
-
-# Step 3: Run batch evaluation
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gemini3 \
-  --dataset-dir ./dataset/ \
-  --max-iter 30 \
-  --aws-hosts "34.230.26.157,54.89.56.184" \
-  --ssh-key ~/.ssh/velora-us.pem
-```
-
-### Example 2: Re-Running After Changes
-
-```bash
-# Force re-sync code changes to remote hosts
-./evaluation/benchmarks/multi_swe_bench/scripts/setup_remote_hosts.sh \
-  --hosts "34.230.26.157,54.89.56.184" \
-  --ssh-key ~/.ssh/velora-us.pem \
-  --force-sync \
-  --skip-poetry-install
-
-# Run batch evaluation
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gemini3 \
-  --dataset-dir ./dataset/ \
-  --aws-hosts "34.230.26.157,54.89.56.184" \
-  --ssh-key ~/.ssh/velora-us.pem
-```
-
-### Example 3: Testing Single Instance Before Batch
-
-```bash
-# Test one instance first
-./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_with_s3.sh \
-  llm.gemini3 \
-  ./dataset/518290527943513.jsonl
-
-# Check results
-cat evaluation/evaluation_outputs/outputs/*/CodeActAgent/*/eval_outputs/518290527943513/report.json
-
-# If successful, run all instances
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gemini3 \
-  --dataset-dir ./dataset/
-```
-
-### Example 4: Using Different Models
-
-```bash
-# With Gemini
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gemini3 \
-  --dataset-dir ./dataset/ \
-  --max-iter 30
-
-# With GPT (usually needs more iterations)
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.gpt \
-  --dataset-dir ./dataset/ \
-  --max-iter 100
-
-# With Claude
-./evaluation/benchmarks/multi_swe_bench/scripts/run_batch_eval.sh \
-  --model llm.claude \
-  --dataset-dir ./dataset/ \
-  --max-iter 50
-```
-
----
-
-## Troubleshooting
-
-### Common Errors and Solutions
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| `poetry: command not found` | Poetry not in PATH for SSH | Run `setup_remote_hosts.sh` to install |
-| `TmuxCommandNotFound (exit code 3)` | Docker image missing tmux | Script auto-fixes; if persists, rebuild image |
-| `No such file or directory: run_full_eval_with_s3.sh` | VeloraHarness not synced | Run `setup_remote_hosts.sh --force-sync` |
-| `scp: stat local "22"` | Using `-p` instead of `-P` for scp | Fixed in latest script version |
-| `Cannot connect to Docker daemon` | Docker not running | `sudo systemctl start docker` |
-| `No space left on device` | Disk full | Run `docker system prune -af --volumes` |
-| `S3 download failed` | AWS credentials issue | Check `aws configure` on remote |
-| `SSH connection refused` | Wrong key/port/host | Verify SSH settings manually |
-
-### Debugging Commands
-
-```bash
-# Check Docker disk usage
-docker system df
-
-# List all images
-docker images | grep -E "(mswebench|openhands)"
-
-# Clean all Docker data
-docker system prune -af --volumes
-
-# Test SSH to remote host
-ssh -i ~/.ssh/velora-us.pem ubuntu@34.230.26.157 "echo 'OK'"
-
-# Check Poetry on remote
-ssh -i ~/.ssh/velora-us.pem ubuntu@34.230.26.157 \
-  "source ~/.bashrc; export PATH=\$HOME/.local/bin:\$PATH; poetry --version"
-
-# Check AWS credentials on remote
-ssh -i ~/.ssh/velora-us.pem ubuntu@34.230.26.157 "aws sts get-caller-identity"
-
-# View trajectory output
-cat evaluation/evaluation_outputs/outputs/.../output.jsonl | python3 -m json.tool
-
-# View evaluation report
-cat evaluation/evaluation_outputs/outputs/.../eval_outputs/*/report.json | python3 -m json.tool
-```
-
----
-
-## Output Files Reference
-
-### Single Instance Output Structure
+Both scripts produce identical output structures:
 
 ```
 evaluation/evaluation_outputs/outputs/
-└── __path__to__dataset.jsonl-train/
-    └── CodeActAgent/
-        └── gemini-3-pro-preview_maxiter_30_N_v1.1.0-no-hint-run_1/
-            ├── output.jsonl              # Trajectory + git_patch
-            ├── metadata.json             # Run metadata
-            ├── llm_completions/          # Raw LLM responses
-            │   └── *.json
-            ├── logs/                     # Execution logs
-            ├── eval_pilot2_output.jsonl  # Evaluation results
-            └── eval_outputs/
-                ├── report.json           # Aggregate report
-                └── <instance_id>/
-                    ├── report.json       # Instance report
-                    ├── patch.diff        # Applied patch
-                    ├── test_output.txt   # Pytest output
-                    └── run_instance.log  # Eval log
+└── multi_swe_bench/
+    └── {agent}/{model}/{eval_note}/
+        └── {timestamp}/
+            ├── output.jsonl           ← Main trajectory file with patch
+            ├── metadata.json          ← Run configuration metadata
+            ├── llm_completions/       ← LLM API responses
+            │   └── {instance_id}/
+            │       └── *.json
+            └── eval_outputs/          ← Evaluation results
+                └── {instance_id}/
+                    ├── report.json    ← Test results (OpenHands format)
+                    ├── patch.diff     ← Applied git patch
+                    ├── test_output.txt ← Full test execution output
+                    └── run_instance.log ← Container execution log
 ```
 
-### Batch Evaluation Output Structure
+### Key Files Explained
 
-```
-evaluation/batch_logs/
-└── 20260128_053708/                    # Timestamp directory
-    ├── config.json                     # Run configuration
-    ├── distribution.json               # Instance → Host mapping
-    ├── progress.json                   # Real-time progress (local)
-    ├── summary.json                    # Final aggregated results
-    ├── worker_script.sh                # Worker script (distributed)
-    │
-    │   # Local mode:
-    ├── <instance_id>.log               # Per-instance logs
-    │
-    │   # Distributed mode:
-    ├── worker_host0.log                # Host 0 worker log
-    ├── worker_host1.log                # Host 1 worker log
-    └── outputs_host0/                  # Collected from Host 0
-        └── evaluation_outputs/...
-```
+#### `output.jsonl`
+Main trajectory file containing:
+- Agent's conversation history
+- Final patch in `test_result.git_patch`
+- Trajectory metadata
 
-### Report JSON Structure
-
+#### `eval_outputs/{instance_id}/report.json`
+Standardized test results in OpenHands format:
 ```json
 {
-  "518290527943513": {
+  "instance_id": {
     "patch_is_None": false,
     "patch_exists": true,
     "patch_successfully_applied": true,
     "resolved": true,
     "tests_status": {
       "FAIL_TO_PASS": {
-        "success": ["test_case_1", "test_case_2"],
+        "success": ["test1", "test2"],
         "failure": []
       },
       "PASS_TO_PASS": {
-        "success": ["test_case_3", "test_case_4"],
+        "success": ["test3", "test4"],
         "failure": []
-      },
-      "FAIL_TO_FAIL": {"success": [], "failure": []},
-      "PASS_TO_FAIL": {"success": [], "failure": []}
+      }
     }
   }
 }
 ```
 
-### Summary JSON Structure (Batch)
-
-```json
-{
-  "timestamp": "20260128_053708",
-  "model_config": "llm.gemini3",
-  "total_instances": 7,
-  "completed": [
-    {"id": "518290527943513", "duration": 245},
-    {"id": "538997559166630", "duration": 312}
-  ],
-  "failed": [
-    {"id": "546207528428803", "exit_code": 1, "duration": 45}
-  ],
-  "results": {
-    "518290527943513": {
-      "resolved": true,
-      "patch_applied": true,
-      "source": "outputs_host0/..."
-    }
-  },
-  "stats": {
-    "total": 7,
-    "completed": 5,
-    "failed": 2,
-    "resolved": 3,
-    "patch_applied": 4
-  }
-}
-```
+#### `test_output.txt`
+Complete output from test execution, including:
+- Test framework output (pytest/unittest)
+- Pass/fail status for each test
+- Error messages and stack traces
 
 ---
 
-## Quick Reference Card
+## Environment Variables
 
-### Commands Cheat Sheet
+### Critical Variables (Already Set in Scripts)
+
+These are pre-configured in the scripts and should not be changed:
 
 ```bash
-# Setup hosts
-./setup_remote_hosts.sh --hosts "h1,h2" --ssh-key ~/.ssh/key.pem
-
-# Check hosts only
-./setup_remote_hosts.sh --hosts "h1,h2" --ssh-key ~/.ssh/key.pem --check-only
-
-# Single instance eval
-./run_full_eval_with_s3.sh llm.gemini3 ./dataset/instance.jsonl
-
-# Batch local
-./run_batch_eval.sh -m llm.gemini3 -d ./dataset/
-
-# Batch distributed
-./run_batch_eval.sh -m llm.gemini3 -d ./dataset/ --aws-hosts "h1,h2" --ssh-key ~/.ssh/key.pem
-
-# Dry run
-./run_batch_eval.sh -m llm.gemini3 -d ./dataset/ --aws-hosts "h1,h2" --dry-run
-
-# Resume from instance
-./run_batch_eval.sh -m llm.gemini3 -d ./dataset/ --resume-from "INSTANCE_ID"
+export DOCKER_BUILDKIT=0                    # Prevents buildx failures
+export EVAL_DOCKER_IMAGE_PREFIX="mswebench" # Docker image prefix
+export USE_INSTANCE_IMAGE=true              # Use instance-specific images
+export LANGUAGE=python                      # Task language
+export RUN_WITH_BROWSING=false              # Disable browser
+export USE_HINT_TEXT=false                  # Disable hints
 ```
 
-### Key Configuration Files
+### Optional Variables (Can Be Set Before Running)
 
-| File | Purpose |
-|------|---------|
-| `config.toml` | LLM API configurations |
-| `dataset/*.jsonl` | Instance definitions |
-| `~/.ssh/velora-us.pem` | SSH key for AWS hosts |
-| `~/.aws/credentials` | AWS S3 access |
+```bash
+# Number of evaluation runs (default: 1)
+export N_RUNS=3
+
+# Custom experiment name (appended to eval_note)
+export EXP_NAME="my_experiment"
+
+# OpenHands version (auto-detected if not set)
+export OPENHANDS_VERSION="v1.1.0"
+```
+
+### Example with Custom Variables
+
+```bash
+# Run evaluation 3 times with custom experiment name
+export N_RUNS=3
+export EXP_NAME="ablation_study"
+
+./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_local_docker.sh \
+  llm.gpt \
+  data/tasks/python__mypy-11220.jsonl
+```
 
 ---
 
-*Documentation Version: 2.0 | Last Updated: January 2026*
+## Troubleshooting
+
+### Common Issues and Solutions
+
+#### 1. Docker Image Not Found
+
+**Error:**
+```
+ERROR: Expected Docker image not found: mswebench/...
+```
+
+**Solutions:**
+
+For S3 script:
+```bash
+# Check S3 access
+aws s3 ls s3://kuberha-velora/velora-files/images/
+
+# Verify AWS credentials
+aws sts get-caller-identity
+```
+
+For local Docker script:
+```bash
+# Check if image exists
+docker images | grep mswebench
+
+# If not, either:
+# Option 1: Download and load from S3
+aws s3 cp s3://kuberha-velora/velora-files/images/{image}.tar ./
+docker load < {image}.tar
+
+# Option 2: Build the image
+# (Follow SWE-bench Docker build instructions)
+
+# Option 3: Use the S3 script instead
+./run_full_eval_with_s3.sh ...
+```
+
+#### 2. Output File Not Found
+
+**Error:**
+```
+ERROR: Could not find output.jsonl!
+```
+
+**Solutions:**
+```bash
+# Check if trajectory generation succeeded
+ls -la evaluation/evaluation_outputs/outputs/
+
+# Look for recent output files
+find evaluation/evaluation_outputs/outputs/ -name "output.jsonl" -mmin -60
+
+# Check for errors in trajectory generation
+# Look at the logs above the error message
+```
+
+#### 3. Evaluation Script Not Found
+
+**Error:**
+```
+ERROR: Evaluation script not found: eval_pilot2_standardized.py
+```
+
+**Solutions:**
+```bash
+# Verify script location
+ls -la evaluation/benchmarks/multi_swe_bench/scripts/eval_pilot2_standardized.py
+
+# If missing, ensure you're in the correct directory
+pwd  # Should be VeloraHarness root
+
+# Run from correct location
+cd /path/to/VeloraHarness
+./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_local_docker.sh ...
+```
+
+#### 4. No Patch Generated
+
+**Output:**
+```
+WARNING: No valid patch found in output. Skipping evaluation.
+```
+
+**This is normal if:**
+- Agent couldn't solve the issue within MAX_ITER iterations
+- Agent encountered errors during execution
+- Task is particularly challenging
+
+**Solutions:**
+```bash
+# Increase iterations
+./run_full_eval_local_docker.sh llm.gpt task.jsonl 1 100 1
+
+# Try a different model
+./run_full_eval_local_docker.sh llm.claude task.jsonl 1 50 1
+
+# Check trajectory for errors
+cat {output_dir}/output.jsonl | jq .
+```
+
+#### 5. Docker Permission Errors
+
+**Error:**
+```
+permission denied while trying to connect to the Docker daemon socket
+```
+
+**Solutions:**
+```bash
+# Add user to docker group (Linux)
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Or run with sudo (not recommended for production)
+sudo ./run_full_eval_local_docker.sh ...
+
+# macOS: Ensure Docker Desktop is running
+open -a Docker
+```
+
+#### 6. Poetry Not Found
+
+**Error:**
+```
+poetry: command not found
+```
+
+**Solutions:**
+```bash
+# Install poetry
+curl -sSL https://install.python-poetry.org | python3 -
+
+# Or use pip
+pip install poetry
+
+# Activate virtual environment
+cd /path/to/VeloraHarness
+poetry install
+poetry shell
+```
+
+---
+
+## Differences Between S3 and Local Versions
+
+| Aspect | S3 Version | Local Version |
+|--------|------------|---------------|
+| **Docker Image Source** | Downloads from S3 | Uses local images |
+| **Internet Required** | Yes (for S3 access) | No (once image is loaded) |
+| **First-Time Setup** | Automatic | Manual image setup |
+| **Speed** | Slower (download time) | Faster (no download) |
+| **AWS Credentials** | Required | Not required |
+| **Repeated Evaluations** | Re-downloads each time | Reuses local image |
+| **Image Verification** | Downloads if missing | Prompts user if missing |
+| **Use Case** | Production, CI/CD | Development, iteration |
+
+### Code Differences
+
+The only significant differences are in the **Docker Image Management** section:
+
+**S3 Version:**
+```bash
+# Downloads from S3
+aws s3 cp "$S3_PATH" "$S3_IMAGE_FILE"
+docker load < "$S3_IMAGE_FILE"
+rm -f "$S3_IMAGE_FILE"
+```
+
+**Local Version:**
+```bash
+# Verifies local image exists
+if docker images --format "..." | grep -q "^${IMAGE_URI}$"; then
+  echo "✓ Docker image found locally"
+else
+  echo "WARNING: Expected Docker image not found"
+  # Prompts user for action
+fi
+```
+
+Everything else (trajectory generation, evaluation, report generation) is **identical**.
+
+---
+
+## Advanced Usage
+
+### Running Multiple Experiments
+
+```bash
+#!/bin/bash
+# batch_eval.sh - Run evaluations with different configurations
+
+TASKS=(
+  "data/tasks/task1.jsonl"
+  "data/tasks/task2.jsonl"
+  "data/tasks/task3.jsonl"
+)
+
+MODELS=("llm.gpt" "llm.claude" "llm.kimi")
+
+for task in "${TASKS[@]}"; do
+  for model in "${MODELS[@]}"; do
+    echo "Evaluating $task with $model"
+    ./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_local_docker.sh \
+      "$model" \
+      "$task" \
+      1 \
+      30 \
+      1
+  done
+done
+```
+
+### Collecting Results
+
+```bash
+#!/bin/bash
+# collect_results.sh - Aggregate all evaluation results
+
+OUTPUT_BASE="evaluation/evaluation_outputs/outputs"
+
+# Find all report.json files
+find "$OUTPUT_BASE" -name "report.json" -path "*/eval_outputs/*" | while read report; do
+  instance_id=$(basename $(dirname "$report"))
+  resolved=$(cat "$report" | jq -r ".\"$instance_id\".resolved // false")
+  echo "$instance_id: $resolved"
+done
+```
+
+### Debugging Failed Evaluations
+
+```bash
+#!/bin/bash
+# debug_eval.sh - Get detailed info about a failed evaluation
+
+OUTPUT_DIR=$1
+
+if [ -z "$OUTPUT_DIR" ]; then
+  echo "Usage: $0 <output_directory>"
+  exit 1
+fi
+
+echo "=== Trajectory ==="
+cat "$OUTPUT_DIR/output.jsonl" | jq '.history[-5:]'
+
+echo ""
+echo "=== Test Output ==="
+cat "$OUTPUT_DIR/eval_outputs/"*/test_output.txt | tail -50
+
+echo ""
+echo "=== Report ==="
+cat "$OUTPUT_DIR/eval_outputs/"*/report.json | jq .
+```
+
+---
+
+## Related Documentation
+
+- **VeloraHarness Main README**: `../../README.md`
+- **Configuration Guide**: `../../../../config.toml.example`
+- **Evaluation Script**: `eval_pilot2_standardized.py`
+- **OpenHands Integration**: See `evaluation/benchmarks/multi_swe_bench/`
+
+---
+
+## Support and Contributing
+
+For issues, questions, or contributions:
+
+1. Check this README first
+2. Review the troubleshooting section
+3. Examine the script source code (well-commented)
+4. Check existing issues/documentation
+
+---
+
+## Version History
+
+- **v1.2** (2026-01-29): Added `run_full_eval_local_docker.sh` for local Docker images
+- **v1.1** (2025-12): Added `run_full_eval_with_s3.sh` with S3 download support
+- **v1.0** (2025-11): Initial evaluation scripts
+
+---
+
+## License
+
+Part of VeloraHarness. See main project license.

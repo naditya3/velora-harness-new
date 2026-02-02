@@ -258,6 +258,23 @@ class ConversationMemory:
             llm_response: ModelResponse = tool_metadata.model_response
             assistant_msg = getattr(llm_response.choices[0], 'message')
 
+            # CRITICAL: Extract output_items for Responses API reasoning accumulation
+            output_items = None
+            if hasattr(assistant_msg, 'output_items'):
+                output_items = assistant_msg.output_items
+            elif isinstance(assistant_msg, dict) and 'output_items' in assistant_msg:
+                output_items = assistant_msg['output_items']
+
+            # CRITICAL: Extract thinking_blocks for Gemini thought_signature preservation
+            # This is REQUIRED for Gemini 3 multi-turn function calling with thinking enabled
+            thinking_blocks = None
+            if hasattr(assistant_msg, 'thinking_blocks'):
+                thinking_blocks = assistant_msg.thinking_blocks
+                if thinking_blocks:
+                    logger.debug(f'Extracted {len(thinking_blocks)} thinking_blocks with signatures from response')
+            elif isinstance(assistant_msg, dict) and 'thinking_blocks' in assistant_msg:
+                thinking_blocks = assistant_msg['thinking_blocks']
+
             # Add the LLM message (assistant) that initiated the tool calls
             # (overwrites any previous message with the same response_id)
             pending_tool_call_action_messages[llm_response.id] = Message(
@@ -267,6 +284,8 @@ class ConversationMemory:
                 if assistant_msg.content and assistant_msg.content.strip()
                 else [],
                 tool_calls=assistant_msg.tool_calls,
+                output_items=output_items,  # Store for reasoning accumulation
+                thinking_blocks=thinking_blocks,  # Store for Gemini thought_signatures
             )
             return []
         elif isinstance(action, AgentFinishAction):
@@ -282,6 +301,20 @@ class ConversationMemory:
                     tool_metadata.model_response.choices[0], 'message'
                 )
                 content = assistant_msg.content or ''
+                
+                # CRITICAL: Extract output_items for reasoning accumulation
+                output_items = None
+                if hasattr(assistant_msg, 'output_items'):
+                    output_items = assistant_msg.output_items
+                elif isinstance(assistant_msg, dict) and 'output_items' in assistant_msg:
+                    output_items = assistant_msg['output_items']
+
+                # CRITICAL: Extract thinking_blocks for Gemini thought_signature preservation
+                thinking_blocks = None
+                if hasattr(assistant_msg, 'thinking_blocks'):
+                    thinking_blocks = assistant_msg.thinking_blocks
+                elif isinstance(assistant_msg, dict) and 'thinking_blocks' in assistant_msg:
+                    thinking_blocks = assistant_msg['thinking_blocks']
 
                 # save content if any, to thought
                 if action.thought:
@@ -292,12 +325,18 @@ class ConversationMemory:
 
                 # remove the tool call metadata
                 action.tool_call_metadata = None
+            else:
+                output_items = None  # No tool_metadata, no output_items
+                thinking_blocks = None  # No tool_metadata, no thinking_blocks
+
             if role not in ('user', 'system', 'assistant', 'tool'):
                 raise ValueError(f'Invalid role: {role}')
             return [
                 Message(
                     role=role,  # type: ignore[arg-type]
                     content=[TextContent(text=action.thought)],
+                    output_items=output_items if role == 'assistant' else None,  # Add reasoning items
+                    thinking_blocks=thinking_blocks if role == 'assistant' else None,  # Add Gemini thought_signatures
                 )
             ]
         elif isinstance(action, MessageAction):
