@@ -79,3 +79,9 @@ config.toml
 llm_completions/
 evaluation_outputs/
 
+
+# Config files with API keys (use .example files as templates)
+config.toml
+**/config.toml
+*.local
+*.backup
