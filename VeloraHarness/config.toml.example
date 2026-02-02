@@ -160,13 +160,18 @@ retry_max_wait = 180
 [llm.gemini.completion_kwargs]
 thinkingLevel = "high"
 
-# Claude via direct Anthropic API
+# Claude Opus 4.5 with Extended Thinking
 [llm.claude]
-model = "claude-sonnet-4-5-20250929"
-api_key = "YOUR_ANTHROPIC_API_KEY"
-temperature = 0.2
-max_input_tokens = 200000
-max_output_tokens = 64000
+model = "claude-opus-4-5-20251101"
+api_key = "<YOUR_ANTHROPIC_API_KEY>"
+temperature = 1.0
+timeout = 7200  # 2 hours for extended thinking tasks
+num_retries = 8
+retry_min_wait = 15
+retry_max_wait = 120
+
+[llm.claude.completion_kwargs]
+thinking = {"type" = "enabled", "budget_tokens" = 20000}  # 20K for SWE-bench tasks
 
 # Qwen via custom endpoint (e.g., Bedrock Proxy)
 [llm.qwen]
