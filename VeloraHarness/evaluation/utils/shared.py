@@ -190,6 +190,17 @@ def make_metadata(
     )
     logger.info(f'Using evaluation output directory: {eval_output_path}')
 
+    # Get git commit hash, with fallback for non-git environments (e.g., remote hosts)
+    try:
+        git_commit = subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'],
+            stderr=subprocess.DEVNULL
+        ).decode('utf-8').strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # Not a git repository or git not available - use fallback
+        git_commit = os.environ.get('OPENHANDS_GIT_COMMIT', 'unknown')
+        logger.warning(f'Not a git repository, using git_commit={git_commit}')
+
     metadata = EvalMetadata(
         agent_class=agent_class,
         llm_config=llm_config,
@@ -197,9 +208,7 @@ def make_metadata(
         max_iterations=max_iterations,
         eval_output_dir=eval_output_path,
         start_time=time.strftime('%Y-%m-%d %H:%M:%S'),
-        git_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'])
-        .decode('utf-8')
-        .strip(),
+        git_commit=git_commit,
         dataset=dataset_name,
         data_split=data_split,
         details=details,
