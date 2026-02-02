@@ -91,3 +91,6 @@ evaluation/benchmarks/swe_bench/examples/*.jsonl
 
 # Dataset files (should not be in repo)
 dataset/
+
+# Config with credentials (use config.toml.example as template)
+config.toml
