@@ -56,6 +56,7 @@ class ModelFeatures:
     supports_reasoning_effort: bool
     supports_prompt_cache: bool
     supports_stop_words: bool
+    uses_responses_api: bool  # True for models that require Responses API (gpt-5.2-codex, o3, etc.)
 
 
 # Pattern tables capturing current behavior. Keep patterns lowercase.
@@ -81,6 +82,8 @@ FUNCTION_CALLING_PATTERNS: list[str] = [
     # Google Gemini
     'gemini-2.5-pro*',
     'gemini-3*',
+    'gemini-3-pro-preview*',
+    'gemini-3-pro-preview-2025-01-31',
     # Groq models (via groq/ provider prefix)
     'groq/*',
     # Others
@@ -110,6 +113,8 @@ REASONING_EFFORT_PATTERNS: list[str] = [
     'o4-mini-2025-04-16',
     'gemini-2.5-flash',
     'gemini-2.5-pro',
+    'gemini-3-pro-preview',
+    'gemini-3-pro-preview-2025-01-31',
     'gpt-5*',
     # DeepSeek reasoning family
     'deepseek-r1-0528*',
@@ -140,6 +145,21 @@ SUPPORTS_STOP_WORDS_FALSE_PATTERNS: list[str] = [
     'deepseek-r1-0528*',
 ]
 
+# Models that require the Responses API instead of Chat Completions API
+# These models use a different tool format with flat structure (no nested 'function' object)
+RESPONSES_API_PATTERNS: list[str] = [
+    # GPT-5.2-codex family - only available in Responses API
+    'gpt-5.2-codex*',
+    'gpt-5-codex*',
+    'gpt-5.1-codex*',
+    # o3 series models - designed for Responses API
+    'o3',
+    'o3-*',
+    'o3-mini*',
+    # o1-pro - uses Responses API
+    'o1-pro*',
+]
+
 
 def get_features(model: str) -> ModelFeatures:
     return ModelFeatures(
@@ -149,4 +169,5 @@ def get_features(model: str) -> ModelFeatures:
         supports_stop_words=not model_matches(
             model, SUPPORTS_STOP_WORDS_FALSE_PATTERNS
         ),
+        uses_responses_api=model_matches(model, RESPONSES_API_PATTERNS),
     )

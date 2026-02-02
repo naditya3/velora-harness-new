@@ -292,6 +292,31 @@ def get_instruction(instance: pd.Series, metadata: EvalMetadata):
             '   Make sure all these tests pass with your changes.\n'
             "Your thinking should be thorough and so it's fine if it's very long.\n"
         ),
+        'php': (
+            '<uploaded_files>\n'
+            f'/workspace/{workspace_dir_name}\n'
+            '</uploaded_files>\n'
+            f"I've uploaded a PHP code repository in the directory {workspace_dir_name}. Consider the following issue description:\n\n"
+            f'<issue_description>\n'
+            f'{instance.problem_statement}\n'
+            '</issue_description>\n\n'
+            'Can you help me implement the necessary changes to the repository so that the requirements specified in the <issue_description> are met?\n'
+            "The development PHP environment is already set up for you (i.e., all dependencies already installed via Composer), so you don't need to install other packages.\n"
+            'Your task is to make the necessary changes to files in the /workspace directory to ensure the <issue_description> is satisfied.\n'
+            'You may create or update unit tests when necessary to ensure correctness and coverage.\n'
+            'Follow these steps to resolve the issue:\n'
+            '1. As a first step, it might be a good idea to explore the repo to familiarize yourself with its structure.\n'
+            '2. Create a script to reproduce the error and execute it with `php <filename.php>` or run tests with `vendor/bin/phpunit` using the BashTool, to confirm the error.\n'
+            '3. Edit the sourcecode of the repo to resolve the issue.\n'
+            '4. Rerun your reproduce script or tests and confirm that the error is fixed!\n'
+            '5. Think about edgecases, add comprehensive tests for them in your reproduce script, and run them to make sure your fix handles them as well.\n'
+            f'6. Once you are done with the initial implementation, please carefully re-read the problem description and check the difference between the current code and the base commit {instance["base_commit"]}. Do you think that the issue has been completely and comprehensively solved? Write tests to check the correctness of the solution, specifically focusing on tests that may point out any remaining problems that are not yet solved. Run all of the tests in the repo and check if any of them fail, and if they do fix the code. Repeat this process of carefully reading the problem description and current implementation, testing, and fixing any problems until you are confident that the current implementation is correct. Find and run any tests in the repo that are related to:\n'
+            '   - The issue you are fixing\n'
+            '   - The files you modified\n'
+            '   - The functions or classes you changed\n'
+            '   Make sure all these tests pass with your changes.\n'
+            "Your thinking should be thorough and so it's fine if it's very long.\n"
+        ),
     }
     instruction = instructions.get(LANGUAGE.lower())
 
@@ -302,17 +327,49 @@ def get_instruction(instance: pd.Series, metadata: EvalMetadata):
     return instruction
 
 
-# TODO: 适应所有的语言
-# def get_instance_docker_image(instance_id: str) -> str:
-#     image_name = 'sweb.eval.x86_64.' + instance_id
-#     if LANGUAGE == 'python':
-#         image_name = image_name.replace(
-#             '__', '_s_'
-#         )  # to comply with docker image naming convention
-#         return (DOCKER_IMAGE_PREFIX.rstrip('/') + '/' + image_name).lower()
-#     else:
-#         return image_name.lower() ##加载本地的
+# SWE-Lancer monolith image configuration
+USE_SWELANCER_MONOLITH = os.environ.get('USE_SWELANCER_MONOLITH', 'false').lower() == 'true'
+SWELANCER_MONOLITH_IMAGE = os.environ.get('SWELANCER_MONOLITH_IMAGE', 'swelancer/swelancer_x86_monolith:releasev1')
+
+if USE_SWELANCER_MONOLITH:
+    logger.info(f'SWE-Lancer monolith mode enabled. Using image: {SWELANCER_MONOLITH_IMAGE}')
+
+
 def get_instance_docker_image(instance: pd.Series):
+    """
+    Get the Docker image for a given instance.
+    
+    Priority:
+    1. SWE-Lancer monolith mode (if USE_SWELANCER_MONOLITH=true)
+    2. monolith_image field in dataset
+    3. task_specific_image field in dataset  
+    4. image_storage_uri field in dataset
+    5. Fallback to constructing image name from repo/instance_id
+    """
+    # Check for SWE-Lancer monolith mode
+    if USE_SWELANCER_MONOLITH:
+        logger.info(f'Using SWE-Lancer monolith image: {SWELANCER_MONOLITH_IMAGE}')
+        return SWELANCER_MONOLITH_IMAGE
+    
+    # Check for monolith_image field (SWE-Lancer datasets)
+    monolith_image = instance.get('monolith_image', '')
+    if monolith_image and os.environ.get('PREFER_MONOLITH', 'false').lower() == 'true':
+        logger.info(f'Using monolith_image from dataset: {monolith_image}')
+        return monolith_image
+    
+    # Check for task_specific_image field (SWE-Lancer datasets)
+    task_image = instance.get('task_specific_image', '')
+    if task_image:
+        logger.info(f'Using task_specific_image from dataset: {task_image}')
+        return task_image
+    
+    # Check for image_storage_uri (preferred method from dataset)
+    image_uri = instance.get('image_storage_uri', '')
+    if image_uri and pd.notna(image_uri) and str(image_uri).strip():
+        logger.info(f'Using image_storage_uri from dataset: {image_uri}')
+        return str(image_uri).strip()
+    
+    # Fallback to constructing image name
     if LANGUAGE == 'python':
         image_name = 'sweb.eval.x86_64.' + instance['instance_id']
         image_name = image_name.replace(
@@ -394,6 +451,62 @@ def initialize_runtime(
     logger.info('-' * 30)
     logger.info('BEGIN Runtime Initialization Fn')
     logger.info('-' * 30)
+    
+    # SWE-Lancer monolith mode: checkout base_commit at runtime
+    if USE_SWELANCER_MONOLITH:
+        logger.info('SWE-Lancer monolith mode detected - performing runtime base_commit checkout')
+        base_commit = instance.get('base_commit', '')
+        instance_id = instance.get('instance_id', '')
+        repo_path = instance.get('repo_path', '/app/expensify')
+        
+        if base_commit:
+            logger.info(f'Checking out base_commit {base_commit[:12]}... in {repo_path}')
+            
+            # Wait for container setup to complete (SWE-Lancer specific)
+            action = CmdRunAction(command='while [ ! -f /setup_done.txt ]; do echo "Waiting for setup..."; sleep 5; done; echo "Setup complete"')
+            action.set_hard_timeout(300)
+            logger.info(action, extra={'msg_type': 'ACTION'})
+            obs = runtime.run_action(action)
+            logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+            
+            # Checkout the base commit
+            checkout_cmd = f'cd {repo_path} && git fetch origin 2>/dev/null || true && git checkout {base_commit} 2>&1 && git reset --hard {base_commit} 2>&1'
+            action = CmdRunAction(command=checkout_cmd)
+            action.set_hard_timeout(300)
+            logger.info(action, extra={'msg_type': 'ACTION'})
+            obs = runtime.run_action(action)
+            logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+            
+            if obs.exit_code != 0:
+                logger.warning(f'Base commit checkout may have issues: {obs.content}')
+            else:
+                logger.info(f'Successfully checked out {base_commit[:12]}')
+            
+            # Set environment variables for SWE-Lancer
+            action = CmdRunAction(
+                command=f"echo 'export ISSUE_ID={instance_id}' >> ~/.bashrc && "
+                        f"echo 'export SWE_INSTANCE_ID={instance_id}' >> ~/.bashrc"
+            )
+            action.set_hard_timeout(60)
+            logger.info(action, extra={'msg_type': 'ACTION'})
+            obs = runtime.run_action(action)
+            logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+            
+            # Create workspace symlinks for SWE-Lancer
+            action = CmdRunAction(
+                command=f'mkdir -p /workspace && ln -sf {repo_path} /workspace/expensify 2>/dev/null || true'
+            )
+            action.set_hard_timeout(60)
+            logger.info(action, extra={'msg_type': 'ACTION'})
+            obs = runtime.run_action(action)
+            logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+            
+            logger.info('SWE-Lancer monolith initialization complete')
+            logger.info('-' * 30)
+            logger.info('END Runtime Initialization Fn')
+            logger.info('-' * 30)
+            return  # Skip standard initialization for SWE-Lancer monolith
+    
     workspace_dir_name = _get_swebench_workspace_dir_name(instance)
     obs: CmdOutputObservation
 

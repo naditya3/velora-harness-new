@@ -29,9 +29,15 @@ set -eo pipefail
 export DOCKER_BUILDKIT=0                    # CRITICAL: Prevents buildx failures
 export EVAL_DOCKER_IMAGE_PREFIX="mswebench/" # Our Docker image prefix
 export USE_INSTANCE_IMAGE=true              # Use instance-specific images
-export LANGUAGE=python                      # Our tasks are Python
+export LANGUAGE=python                      # Default, will be overridden from dataset
 export RUN_WITH_BROWSING=false
 export USE_HINT_TEXT=false
+
+# Use pre-built runtime if available (set via: export RUNTIME_CONTAINER_IMAGE=...)
+if [ -n "$RUNTIME_CONTAINER_IMAGE" ]; then
+  echo "Using pre-built runtime container image: $RUNTIME_CONTAINER_IMAGE"
+  export RUNTIME_CONTAINER_IMAGE
+fi
 
 # ============================================
 # ARGUMENT PARSING
@@ -65,6 +71,13 @@ if [ ! -f "$DATASET" ]; then
 fi
 
 DATASET_ABS=$(realpath "$DATASET")
+
+# ============================================
+# EXTRACT LANGUAGE FROM DATASET
+# ============================================
+TASK_LANGUAGE=$(python3 -c "import json; print(json.load(open('$DATASET_ABS')).get('language', 'python').lower())" 2>/dev/null || echo "python")
+export LANGUAGE="$TASK_LANGUAGE"
+echo "Detected language from dataset: $LANGUAGE"
 
 # ============================================
 # DISPLAY CONFIGURATION
