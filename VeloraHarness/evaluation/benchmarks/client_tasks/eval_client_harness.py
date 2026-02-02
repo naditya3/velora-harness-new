@@ -205,6 +205,68 @@ def parse_log_tox(log: str, f2p_tests: List[str], p2p_tests: List[str]) -> Dict[
     return parse_log_pytest_v3(log, f2p_tests, p2p_tests)
 
 
+def parse_log_swelancer_exitcode(log: str, f2p_tests: List[str], p2p_tests: List[str]) -> Dict[str, str]:
+    """
+    Parser for SWE-Lancer that uses pytest exit code for grading.
+    
+    SWE-Lancer grading is based on pytest exit code:
+    - Exit code 0 = PASS
+    - Exit code 1 = FAIL
+    - Exit code >= 2 = ERROR
+    """
+    test_status_map = {}
+    
+    # Look for exit code patterns
+    exit_code = None
+    
+    # Pattern 1: pytest_exit_code
+    match = re.search(r'pytest_exit_code[:\s=]+(\d+)', log, re.IGNORECASE)
+    if match:
+        exit_code = int(match.group(1))
+    
+    # Pattern 2: Exit code at end of output
+    if exit_code is None:
+        match = re.search(r'exit\s+code[:\s]+(\d+)', log, re.IGNORECASE)
+        if match:
+            exit_code = int(match.group(1))
+    
+    # Find test names in log or use provided f2p_tests
+    test_names = f2p_tests if f2p_tests else ['test_expensify_0000']
+    
+    # Grade based on exit code
+    if exit_code is not None:
+        if exit_code == 0:
+            for name in test_names:
+                test_name = name.split("::")[-1] if "::" in name else name
+                test_status_map[test_name] = TestStatus.PASSED.value
+        elif exit_code == 1:
+            for name in test_names:
+                test_name = name.split("::")[-1] if "::" in name else name
+                test_status_map[test_name] = TestStatus.FAILED.value
+        else:
+            for name in test_names:
+                test_name = name.split("::")[-1] if "::" in name else name
+                test_status_map[test_name] = TestStatus.ERROR.value
+    else:
+        # Fallback to checking for passed/failed summary
+        if re.search(r'\d+\s+passed', log):
+            for name in test_names:
+                test_name = name.split("::")[-1] if "::" in name else name
+                test_status_map[test_name] = TestStatus.PASSED.value
+        elif re.search(r'\d+\s+failed', log):
+            for name in test_names:
+                test_name = name.split("::")[-1] if "::" in name else name
+                test_status_map[test_name] = TestStatus.FAILED.value
+    
+    return test_status_map
+
+
+def parse_log_playwright(log: str, f2p_tests: List[str], p2p_tests: List[str]) -> Dict[str, str]:
+    """Parser for SWE-Lancer Playwright tests run via pytest."""
+    # Playwright tests in SWE-Lancer are graded via exit code
+    return parse_log_swelancer_exitcode(log, f2p_tests, p2p_tests)
+
+
 # Parser registry
 PARSER_REGISTRY = {
     "python/parse_log_pytest": parse_log_pytest,
@@ -212,6 +274,10 @@ PARSER_REGISTRY = {
     "python/parse_log_pytest_v3": parse_log_pytest_v3,
     "python/parse_log_unittest": parse_log_unittest,
     "python/parse_log_tox": parse_log_tox,
+    # SWE-Lancer parsers
+    "javascript/parse_log_playwright": parse_log_playwright,
+    "swelancer/parse_log_playwright": parse_log_playwright,
+    "swelancer/parse_log_exitcode": parse_log_swelancer_exitcode,
 }
 
 
@@ -565,10 +631,32 @@ def get_docker_image_for_instance(instance: Dict[str, Any], instance_id: str) ->
     Determine the Docker image for an instance.
     
     Priority:
-    1. Full image_storage_uri if image exists locally
-    2. mswebench tagged image
-    3. Construct from instance_id pattern
+    1. SWE-Lancer monolith mode (if USE_SWELANCER_MONOLITH env var is set)
+    2. monolith_image field in instance (if PREFER_MONOLITH env var is set)
+    3. task_specific_image field in instance
+    4. image_storage_uri field in instance
+    5. mswebench tagged image
+    6. Construct from instance_id pattern
     """
+    # Check for SWE-Lancer monolith mode
+    if os.environ.get('USE_SWELANCER_MONOLITH', 'false').lower() == 'true':
+        monolith_image = os.environ.get('SWELANCER_MONOLITH_IMAGE', 'swelancer/swelancer_x86_monolith:releasev1')
+        logger.info(f"Using SWE-Lancer monolith image: {monolith_image}")
+        return monolith_image
+    
+    # Check for monolith_image field (SWE-Lancer datasets)
+    if os.environ.get('PREFER_MONOLITH', 'false').lower() == 'true':
+        monolith_image = instance.get('monolith_image', '')
+        if monolith_image:
+            logger.info(f"Using monolith_image from dataset: {monolith_image}")
+            return monolith_image
+    
+    # Check for task_specific_image field (SWE-Lancer datasets)
+    task_image = instance.get('task_specific_image', '')
+    if task_image:
+        logger.info(f"Using task_specific_image from dataset: {task_image}")
+        return task_image
+    
     # Check for image_storage_uri in instance
     if "image_storage_uri" in instance and instance["image_storage_uri"]:
         uri = instance["image_storage_uri"]

@@ -20,11 +20,16 @@ model = "gpt-5.2-codex"
 api_key = "REDACTED_OPENAI_API_KEY"  # ← ADD YOUR KEY
 reasoning_effort = "high"
 native_tool_calling = false
+temperature = 1.0
+
 
 [llm.claude]
 model = "claude-opus-4-5-20251101"
 api_key = "REDACTED_ANTHROPIC_API_KEY_1"  # ← ADD YOUR KEY
 reasoning_effort = "high"
+native_tool_calling = false
+temperature = 1.0
+
 
 
 [llm.gemini3]
@@ -32,6 +37,8 @@ model = "gemini/gemini-3-pro-preview"
 api_key = "REDACTED_GOOGLE_API_KEY"
 reasoning_effort = "high"  # Options: "low", "medium", "high", "none"
 native_tool_calling=false
+temperature = 1.0
+
 
 #################################### Sandbox ###################################
 [sandbox]

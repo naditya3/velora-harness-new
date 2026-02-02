@@ -298,17 +298,49 @@ def get_instruction(instance: pd.Series, metadata: EvalMetadata):
     return instruction
 
 
-# TODO: 适应所有的语言
-# def get_instance_docker_image(instance_id: str) -> str:
-#     image_name = 'sweb.eval.x86_64.' + instance_id
-#     if LANGUAGE == 'python':
-#         image_name = image_name.replace(
-#             '__', '_s_'
-#         )  # to comply with docker image naming convention
-#         return (DOCKER_IMAGE_PREFIX.rstrip('/') + '/' + image_name).lower()
-#     else:
-#         return image_name.lower() ##加载本地的
+# SWE-Lancer monolith image configuration
+USE_SWELANCER_MONOLITH = os.environ.get('USE_SWELANCER_MONOLITH', 'false').lower() == 'true'
+SWELANCER_MONOLITH_IMAGE = os.environ.get('SWELANCER_MONOLITH_IMAGE', 'swelancer/swelancer_x86_monolith:releasev1')
+
+if USE_SWELANCER_MONOLITH:
+    logger.info(f'SWE-Lancer monolith mode enabled. Using image: {SWELANCER_MONOLITH_IMAGE}')
+
+
 def get_instance_docker_image(instance: pd.Series):
+    """
+    Get the Docker image for a given instance.
+    
+    Priority:
+    1. SWE-Lancer monolith mode (if USE_SWELANCER_MONOLITH=true)
+    2. monolith_image field in dataset
+    3. task_specific_image field in dataset  
+    4. image_storage_uri field in dataset
+    5. Fallback to constructing image name from repo/instance_id
+    """
+    # Check for SWE-Lancer monolith mode
+    if USE_SWELANCER_MONOLITH:
+        logger.info(f'Using SWE-Lancer monolith image: {SWELANCER_MONOLITH_IMAGE}')
+        return SWELANCER_MONOLITH_IMAGE
+    
+    # Check for monolith_image field (SWE-Lancer datasets)
+    monolith_image = instance.get('monolith_image', '')
+    if monolith_image and os.environ.get('PREFER_MONOLITH', 'false').lower() == 'true':
+        logger.info(f'Using monolith_image from dataset: {monolith_image}')
+        return monolith_image
+    
+    # Check for task_specific_image field (SWE-Lancer datasets)
+    task_image = instance.get('task_specific_image', '')
+    if task_image:
+        logger.info(f'Using task_specific_image from dataset: {task_image}')
+        return task_image
+    
+    # Check for image_storage_uri first (preferred method from dataset)
+    image_uri = instance.get('image_storage_uri', '')
+    if image_uri:
+        logger.info(f'Using image_storage_uri from dataset: {image_uri}')
+        return image_uri
+    
+    # Fallback to constructing image name
     if LANGUAGE == 'python':
         image_name = 'sweb.eval.x86_64.' + instance['instance_id']
         image_name = image_name.replace(
@@ -390,6 +422,62 @@ def initialize_runtime(
     logger.info('-' * 30)
     logger.info('BEGIN Runtime Initialization Fn')
     logger.info('-' * 30)
+    
+    # SWE-Lancer monolith mode: checkout base_commit at runtime
+    if USE_SWELANCER_MONOLITH:
+        logger.info('SWE-Lancer monolith mode detected - performing runtime base_commit checkout')
+        base_commit = instance.get('base_commit', '')
+        instance_id = instance.get('instance_id', '')
+        repo_path = instance.get('repo_path', '/app/expensify')
+        
+        if base_commit:
+            logger.info(f'Checking out base_commit {base_commit[:12]}... in {repo_path}')
+            
+            # Wait for container setup to complete (SWE-Lancer specific)
+            action = CmdRunAction(command='while [ ! -f /setup_done.txt ]; do echo "Waiting for setup..."; sleep 5; done; echo "Setup complete"')
+            action.set_hard_timeout(300)
+            logger.info(action, extra={'msg_type': 'ACTION'})
+            obs = runtime.run_action(action)
+            logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+            
+            # Checkout the base commit
+            checkout_cmd = f'cd {repo_path} && git fetch origin 2>/dev/null || true && git checkout {base_commit} 2>&1 && git reset --hard {base_commit} 2>&1'
+            action = CmdRunAction(command=checkout_cmd)
+            action.set_hard_timeout(300)
+            logger.info(action, extra={'msg_type': 'ACTION'})
+            obs = runtime.run_action(action)
+            logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+            
+            if obs.exit_code != 0:
+                logger.warning(f'Base commit checkout may have issues: {obs.content}')
+            else:
+                logger.info(f'Successfully checked out {base_commit[:12]}')
+            
+            # Set environment variables for SWE-Lancer
+            action = CmdRunAction(
+                command=f"echo 'export ISSUE_ID={instance_id}' >> ~/.bashrc && "
+                        f"echo 'export SWE_INSTANCE_ID={instance_id}' >> ~/.bashrc"
+            )
+            action.set_hard_timeout(60)
+            logger.info(action, extra={'msg_type': 'ACTION'})
+            obs = runtime.run_action(action)
+            logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+            
+            # Create workspace symlinks for SWE-Lancer
+            action = CmdRunAction(
+                command=f'mkdir -p /workspace && ln -sf {repo_path} /workspace/expensify 2>/dev/null || true'
+            )
+            action.set_hard_timeout(60)
+            logger.info(action, extra={'msg_type': 'ACTION'})
+            obs = runtime.run_action(action)
+            logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+            
+            logger.info('SWE-Lancer monolith initialization complete')
+            logger.info('-' * 30)
+            logger.info('END Runtime Initialization Fn')
+            logger.info('-' * 30)
+            return  # Skip standard initialization for SWE-Lancer monolith
+    
     workspace_dir_name = _get_swebench_workspace_dir_name(instance)
     obs: CmdOutputObservation
 
