@@ -463,11 +463,19 @@ def initialize_runtime(
             logger.info(f'Checking out base_commit {base_commit[:12]}... in {repo_path}')
             
             # Wait for container setup to complete (SWE-Lancer specific)
-            action = CmdRunAction(command='while [ ! -f /setup_done.txt ]; do echo "Waiting for setup..."; sleep 5; done; echo "Setup complete"')
-            action.set_hard_timeout(300)
+            # First check if setup_done.txt exists or is expected
+            check_cmd = '[ -f /setup_done.txt ] && echo "SETUP_FILE_EXISTS" || echo "SETUP_FILE_NOT_FOUND"'
+            action = CmdRunAction(command=check_cmd)
+            action.set_hard_timeout(10)
             logger.info(action, extra={'msg_type': 'ACTION'})
             obs = runtime.run_action(action)
             logger.info(obs, extra={'msg_type': 'OBSERVATION'})
+
+            # Only wait if the setup file exists or is in progress
+            if 'SETUP_FILE_EXISTS' in obs.content:
+                logger.info('Setup file found, container is ready')
+            elif 'SETUP_FILE_NOT_FOUND' in obs.content:
+                logger.info('Setup file not found - container may not require setup wait, proceeding')
             
             # Checkout the base commit
             checkout_cmd = f'cd {repo_path} && git fetch origin 2>/dev/null || true && git checkout {base_commit} 2>&1 && git reset --hard {base_commit} 2>&1'
