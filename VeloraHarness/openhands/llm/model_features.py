@@ -133,6 +133,11 @@ PROMPT_CACHE_PATTERNS: list[str] = [
     'claude-3-opus-20240229',
     'claude-sonnet-4*',
     'claude-opus-4*',
+    # AWS Bedrock inference profiles
+    '*anthropic.claude-sonnet-4*',
+    '*anthropic.claude-opus-4*',
+    '*anthropic.claude-3-5-sonnet*',
+    '*anthropic.claude-3-5-haiku*',
 ]
 
 SUPPORTS_STOP_WORDS_FALSE_PATTERNS: list[str] = [

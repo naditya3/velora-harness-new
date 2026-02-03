@@ -600,12 +600,8 @@ if [ -n "$RUN_ID" ]; then
 
   echo "Running: $INFER_COMMAND"
   echo ""
-  # Change to repository root to run poetry command
-  SCRIPT_ORIG_DIR="$(pwd)"
-  cd "$(dirname "$EVAL_OUTPUT_DIR")/../../../.." 2>/dev/null || cd ../../../../..
+  # Run poetry command (already in correct directory)
   eval $INFER_COMMAND
-  # Return to script directory
-  cd "$SCRIPT_ORIG_DIR"
 else
   # Multiple runs (N_RUNS loop)
   N_RUNS=${N_RUNS:-1}
@@ -628,12 +624,8 @@ else
 
     echo "Running: $INFER_COMMAND"
     echo ""
-    # Change to repository root to run poetry command
-    SCRIPT_ORIG_DIR="$(pwd)"
-    cd "$(dirname "$EVAL_OUTPUT_DIR")/../../../.." 2>/dev/null || cd ../../../../..
+    # Run poetry command (already in correct directory)
     eval $INFER_COMMAND
-    # Return to script directory
-    cd "$SCRIPT_ORIG_DIR"
   done
 fi
 
@@ -656,19 +648,21 @@ echo "Expected output file: $OUTPUT_FILE"
 if [ ! -f "$OUTPUT_FILE" ]; then
   echo "WARNING: Output file not found at expected path: $OUTPUT_FILE"
   echo ""
-  echo "Searching for output.jsonl in evaluation_outputs..."
-  
-  # Fallback: search for the file (for backward compatibility)
-  OUTPUT_BASE="evaluation/evaluation_outputs"
-  FOUND_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" -mmin -30 2>/dev/null | grep "${INSTANCE_ID}" | head -1)
-  
+  echo "Searching for output.jsonl in current run directory..."
+
+  # Search within EVAL_OUTPUT_DIR (which is the Run directory) for this specific model's output
+  # The actual path from run_infer.py is: EVAL_OUTPUT_DIR/__tmp__*/{agent}/{model}_*/output.jsonl
+  # Sort by modification time (newest first) to get the most recent run
+  FOUND_FILE=$(find "$EVAL_OUTPUT_DIR" -type f -name "output.jsonl" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+
   if [ -n "$FOUND_FILE" ]; then
     OUTPUT_FILE="$FOUND_FILE"
     OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
     echo "Found output file at: $OUTPUT_FILE"
   else
-    echo "ERROR: Could not find output.jsonl anywhere!"
-    find $OUTPUT_BASE -type f -name "output.jsonl" 2>/dev/null | tail -10
+    echo "ERROR: Could not find output.jsonl in $EVAL_OUTPUT_DIR"
+    echo "Searched directory tree:"
+    find "$EVAL_OUTPUT_DIR" -type f -name "output.jsonl" 2>/dev/null | head -10
     exit 1
   fi
 fi
@@ -679,10 +673,13 @@ export OUTPUT_DIR
 # ============================================
 # VERIFY INSTANCE ID MATCHES
 # ============================================
-TRAJ_INSTANCE_ID=$(cat "$OUTPUT_FILE" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('instance_id', ''))
+TRAJ_INSTANCE_ID=$(python3 -c "
+import json
+with open('$OUTPUT_FILE', 'r') as f:
+    lines = f.readlines()
+    if lines:
+        d = json.loads(lines[-1])  # Get last entry (final trajectory state)
+        print(d.get('instance_id', ''))
 " 2>/dev/null)
 
 if [ "$TRAJ_INSTANCE_ID" != "$INSTANCE_ID" ]; then
@@ -696,11 +693,16 @@ echo "Instance ID verified: $INSTANCE_ID"
 # ============================================
 # CHECK FOR NON-EMPTY PATCHES
 # ============================================
-PATCH_SIZE=$(cat "$OUTPUT_FILE" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-patch = d.get('test_result', {}).get('git_patch', '')
-print(len(patch))
+PATCH_SIZE=$(python3 -c "
+import json
+with open('$OUTPUT_FILE', 'r') as f:
+    lines = f.readlines()
+    if lines:
+        d = json.loads(lines[-1])  # Get last entry (final trajectory state)
+        patch = d.get('test_result', {}).get('git_patch', '')
+        print(len(patch))
+    else:
+        print(0)
 " 2>/dev/null || echo "0")
 
 echo "Git patch size: $PATCH_SIZE bytes"
