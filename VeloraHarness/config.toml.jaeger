@@ -69,7 +69,7 @@ timeout = 120
 [condenser]
 type = "llm"
 llm_config = "claudeNonR"  # Use Claude Sonnet for history condensation
-max_size = 100  # Maximum conversation size before condensation
-keep_first = 2  # Keep first 2 messages
-max_event_length = 10000  # Maximum length per event
+max_size = 250  # Optimized for Claude Sonnet (200K context) & Gemini 3 Pro (2M context)
+keep_first = 2  # Keep first 2 messages (task description)
+max_event_length = 30000  # Increased to accommodate detailed outputs
 
