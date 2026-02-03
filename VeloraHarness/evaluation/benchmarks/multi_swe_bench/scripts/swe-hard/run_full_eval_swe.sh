@@ -193,8 +193,8 @@ echo "============================================"
 # The mswebench tag is what OpenHands will use
 TAG1="mswebench/sweb.eval.x86_64.${INSTANCE_ID}:latest"
 
-# Check if mswebench-tagged image already exists with tmux
-if docker run --rm --entrypoint /bin/bash "$TAG1" -c "which tmux" >/dev/null 2>&1; then
+# Check if mswebench-tagged image already exists with tmux and wget
+if docker run --rm --entrypoint /bin/bash "$TAG1" -c "which tmux && which wget" >/dev/null 2>&1; then
   echo "✓ Docker image already loaded and tagged: $TAG1"
   LOADED_IMAGE_NAME="$TAG1"
 else
@@ -278,12 +278,12 @@ echo "============================================"
 echo "INSTALLING TMUX IN BASE IMAGE"
 echo "============================================"
 
-# Function to fix Docker image with tmux (handles both Debian and Ubuntu)
-fix_docker_image_with_tmux() {
+# Function to fix Docker image with tmux and wget (handles both Debian and Ubuntu)
+fix_docker_image_with_dependencies() {
   local SOURCE_IMAGE=$1
   local TARGET_TAG=$2
 
-  echo "Fixing Docker image: installing tmux..."
+  echo "Fixing Docker image: installing tmux and wget..."
 
   # Create a temporary container
   CONTAINER_ID=$(docker run -d --entrypoint /bin/bash "$SOURCE_IMAGE" -c "sleep 300")
@@ -300,7 +300,7 @@ fix_docker_image_with_tmux() {
     TMUX_INSTALLED=0
     
     # Approach 1: Use bookworm (stable) to avoid usrmerge/trixie issues
-    # Only install tmux and its direct dependencies, no upgrades
+    # Only install tmux, wget and their direct dependencies, no upgrades
     if [ "$TMUX_INSTALLED" -eq 0 ]; then
       echo "Trying bookworm repos (no upgrades)..."
       cat > /etc/apt/sources.list << "DEBEOF"
@@ -308,25 +308,82 @@ deb http://deb.debian.org/debian bookworm main
 DEBEOF
       # Use -o to avoid upgrading existing packages
       if apt-get update 2>/dev/null && \
-         apt-get install -y --no-install-recommends --no-upgrade tmux 2>/dev/null; then
+         apt-get install -y --no-install-recommends --no-upgrade tmux wget 2>/dev/null; then
         TMUX_INSTALLED=1
-        echo "✓ tmux installed using bookworm repos"
+        echo "✓ tmux and wget installed using bookworm repos"
       fi
     fi
     
-    # Approach 2: Download and install tmux binary directly from bookworm
+    # Approach 2: Download and install tmux and wget binaries directly
+    # Use bullseye (Debian 11) packages to match base image glibc version
     if [ "$TMUX_INSTALLED" -eq 0 ]; then
-      echo "Trying direct download of tmux..."
+      echo "Trying direct download of tmux, wget and their dependencies (bullseye)..."
       cd /tmp
-      # Download tmux and dependencies from bookworm
-      apt-get download tmux libevent-core-2.1-7 2>/dev/null || \
-      curl -sLO http://ftp.debian.org/debian/pool/main/t/tmux/tmux_3.3a-3_amd64.deb 2>/dev/null
+      # First try bullseye packages (glibc 2.31 compatible)
+      echo "Downloading bullseye (Debian 11) packages for glibc compatibility..."
+      curl -sLO http://ftp.debian.org/debian/pool/main/t/tmux/tmux_3.1c-1+deb11u1_amd64.deb 2>/dev/null
+      # tmux needs libevent-2.1-7 (provides libevent-2.1.so.7), NOT just libevent-core
+      curl -sLO http://ftp.debian.org/debian/pool/main/libe/libevent/libevent-2.1-7_2.1.12-stable-1_amd64.deb 2>/dev/null
+      curl -sLO http://ftp.debian.org/debian/pool/main/libu/libutempter/libutempter0_1.2.1-2_amd64.deb 2>/dev/null
+      curl -sLO http://ftp.debian.org/debian/pool/main/w/wget/wget_1.21-1+deb11u1_amd64.deb 2>/dev/null
       
-      if [ -f tmux*.deb ]; then
+      # Install tmux dependencies first
+      if ls libevent*.deb >/dev/null 2>&1; then
+        echo "Installing libevent (provides libevent-2.1.so.7 for tmux)..."
+        dpkg --force-depends -i libevent*.deb 2>/dev/null || true
+      fi
+      if ls libutempter*.deb >/dev/null 2>&1; then
+        echo "Installing libutempter0..."
+        dpkg --force-depends -i libutempter*.deb 2>/dev/null || true
+      fi
+      
+      # Now install tmux
+      if ls tmux*.deb >/dev/null 2>&1; then
+        echo "Installing tmux..."
         dpkg --force-depends -i tmux*.deb 2>/dev/null || true
         if which tmux >/dev/null 2>&1; then
-          TMUX_INSTALLED=1
-          echo "✓ tmux installed via direct download"
+          # Test if tmux actually runs (check for glibc issues)
+          if tmux -V 2>&1 | grep -q "^tmux"; then
+            TMUX_INSTALLED=1
+            echo "✓ tmux installed and working via direct download"
+            tmux -V
+          else
+            echo "tmux binary installed but not working, checking libs..."
+            ldd /usr/bin/tmux 2>/dev/null | grep "not found" || true
+          fi
+        fi
+      fi
+      if [ -f wget*.deb ]; then
+        dpkg --force-depends -i wget*.deb 2>/dev/null || true
+        if which wget >/dev/null 2>&1; then
+          echo "✓ wget installed via direct download"
+        fi
+      fi
+      
+      # If wget still not available, create a curl-based wget wrapper
+      if ! which wget >/dev/null 2>&1; then
+        echo "Creating wget wrapper using curl..."
+        echo "#!/bin/bash" > /usr/local/bin/wget
+        echo "# wget wrapper using curl - handles basic wget usage" >> /usr/local/bin/wget
+        echo "URL=\"\"" >> /usr/local/bin/wget
+        echo "OUTPUT=\"\"" >> /usr/local/bin/wget
+        echo "while [[ \$# -gt 0 ]]; do" >> /usr/local/bin/wget
+        echo "  case \$1 in" >> /usr/local/bin/wget
+        echo "    -O) OUTPUT=\"\$2\"; shift 2;;" >> /usr/local/bin/wget
+        echo "    -o) OUTPUT=\"\$2\"; shift 2;;" >> /usr/local/bin/wget
+        echo "    -q|--quiet) shift;;" >> /usr/local/bin/wget
+        echo "    -*) shift;;" >> /usr/local/bin/wget
+        echo "    *) URL=\"\$1\"; shift;;" >> /usr/local/bin/wget
+        echo "  esac" >> /usr/local/bin/wget
+        echo "done" >> /usr/local/bin/wget
+        echo "if [ -n \"\$OUTPUT\" ]; then" >> /usr/local/bin/wget
+        echo "  exec curl -fsSL -o \"\$OUTPUT\" \"\$URL\"" >> /usr/local/bin/wget
+        echo "else" >> /usr/local/bin/wget
+        echo "  exec curl -fsSLO \"\$URL\"" >> /usr/local/bin/wget
+        echo "fi" >> /usr/local/bin/wget
+        chmod +x /usr/local/bin/wget
+        if [ -x /usr/local/bin/wget ]; then
+          echo "✓ wget wrapper created using curl"
         fi
       fi
     fi
@@ -342,9 +399,12 @@ DEBEOF
       fi
     fi
     
-    # Check if tmux was installed
-    if which tmux >/dev/null 2>&1; then
-      echo "✓ tmux successfully available"
+    # Check if tmux and wget were installed
+    if which tmux >/dev/null 2>&1 && (which wget >/dev/null 2>&1 || [ -x /usr/local/bin/wget ]); then
+      echo "✓ tmux and wget successfully available"
+      exit 0
+    elif which tmux >/dev/null 2>&1; then
+      echo "✓ tmux available, wget missing but continuing"
       exit 0
     else
       echo "WARNING: Could not install tmux - OpenHands may not work properly"
@@ -354,10 +414,13 @@ DEBEOF
 
   if [ $? -eq 0 ]; then
     # Commit the fixed container as a new image
-    docker commit "$CONTAINER_ID" "$TARGET_TAG"
-    echo "✓ Fixed image committed as: $TARGET_TAG"
+    # CRITICAL: Clear ENTRYPOINT to prevent conflicts with OpenHands runtime
+    # The base image may have ENTRYPOINT [/bin/bash] which causes the action server
+    # command to be interpreted as a bash script, breaking the runtime
+    docker commit --change='ENTRYPOINT []' --change='CMD []' "$CONTAINER_ID" "$TARGET_TAG"
+    echo "✓ Fixed image committed as: $TARGET_TAG (ENTRYPOINT cleared)"
   else
-    echo "WARNING: Failed to install tmux, continuing with original image"
+    echo "WARNING: Failed to install dependencies, continuing with original image"
     docker tag "$SOURCE_IMAGE" "$TARGET_TAG"
   fi
 
@@ -366,12 +429,12 @@ DEBEOF
   docker rm "$CONTAINER_ID" >/dev/null 2>&1 || true
 }
 
-# Check if tmux is installed
-if docker run --rm --entrypoint /bin/bash "$TAG1" -c "which tmux" >/dev/null 2>&1; then
-  echo "✓ tmux already installed in image"
+# Check if tmux and wget are installed AND WORKING (verify tmux runs, not just exists)
+if docker run --rm --entrypoint /bin/bash "$TAG1" -c "tmux -V && (which wget || [ -x /usr/local/bin/wget ])" >/dev/null 2>&1; then
+  echo "✓ tmux and wget already installed and working in image"
 else
-  echo "Installing tmux in base image..."
-  fix_docker_image_with_tmux "$TAG1" "$TAG1"
+  echo "Installing tmux and wget in base image..."
+  fix_docker_image_with_dependencies "$TAG1" "$TAG1"
   docker tag "$TAG1" "$TAG2"  # Re-tag TAG2 as well
 fi
 
@@ -498,7 +561,11 @@ if [ -n "$RUN_ID" ]; then
 
   echo "Running: $INFER_COMMAND"
   echo ""
+  # Change to repository root to run poetry command
+  cd ../../../../..
   eval $INFER_COMMAND
+  # Return to script directory
+  cd evaluation/benchmarks/multi_swe_bench/scripts/swe-hard
 else
   # Multiple runs (N_RUNS loop)
   N_RUNS=${N_RUNS:-1}
@@ -520,7 +587,11 @@ else
 
     echo "Running: $INFER_COMMAND"
     echo ""
+    # Change to repository root to run poetry command
+    cd ../../../../..
     eval $INFER_COMMAND
+    # Return to script directory
+    cd evaluation/benchmarks/multi_swe_bench/scripts/swe-hard
   done
 fi
 
