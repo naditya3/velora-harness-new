@@ -152,7 +152,7 @@ def parse_log_unittest(log: str, grading_spec: Any = None) -> Dict[str, str]:
 # ============================================================
 
 def parse_log_phpunit(log: str, grading_spec: Any = None) -> Dict[str, str]:
-    """
+    r"""
     Parser for test logs generated with PHPUnit framework.
     
     Handles PHPUnit testdox output format:
@@ -986,12 +986,25 @@ def run_swelancer_tests(
 # STANDARD TEST COMMAND EXECUTION
 # ============================================================
 
-def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int = 900) -> tuple:
+def run_test_command(
+    container_name: str, 
+    instance: Dict[str, Any], 
+    timeout: int = 900,
+    test_targets: List[str] = None
+) -> tuple:
     """
     Run the test command from the dataset.
     
+    Args:
+        container_name: Docker container name
+        instance: Dataset instance with test_command, test_patch, etc.
+        timeout: Command timeout in seconds
+        test_targets: Optional list of specific test targets (F2P + P2P) to pass to pytest
+    
     Returns: (returncode, stdout, stderr)
     """
+    import shlex
+    
     repo_directory = "/app/repo"
     test_patch_raw = instance.get("test_patch", "")
     test_command = instance.get("test_command", "pytest")
@@ -1036,20 +1049,63 @@ def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int
         )
         logger.info(f"Test patch {i+1} apply result: {returncode}")
     
-    # Unset proxy environment variables
+    # Unset proxy environment variables baked into some client images
     unset_proxy = (
         "unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ftp_proxy FTP_PROXY all_proxy ALL_PROXY; "
         "export http_proxy='' https_proxy='' HTTP_PROXY='' HTTPS_PROXY=''; "
     )
     
+    # Extract the actual test execution part from test_command
     test_exec = test_command
     if "&&" in test_command and "source" in test_command:
         parts = test_command.split("&&")
         test_exec = parts[-1].strip()
     
+    # ============================================================
+    # APPEND TEST TARGETS TO PYTEST (from (1).py merge)
+    # This ensures pytest runs only the specific F2P/P2P tests
+    # ============================================================
+    if test_targets:
+        def _should_append_targets(cmd: str) -> bool:
+            """Check if we should append test targets to the command."""
+            try:
+                tokens = shlex.split(cmd)
+            except ValueError:
+                tokens = cmd.split()
+            if not tokens:
+                return False
+            # Only append to pytest commands
+            if not tokens[0].endswith("pytest") and "pytest" not in tokens[0]:
+                return False
+            # Don't append if command already has specific tests or filters
+            for tok in tokens[1:]:
+                if tok.startswith("-k") or tok.startswith("-m"):
+                    return False
+                if "tests/" in tok or "::" in tok or tok.endswith(".py"):
+                    return False
+            return True
+        
+        if _should_append_targets(test_exec):
+            quoted = " ".join(shlex.quote(t) for t in test_targets)
+            test_exec = f"{test_exec} {quoted}"
+            logger.info(f"Appended {len(test_targets)} test targets to pytest command")
+    
+    # ============================================================
+    # SYMLINK GUARD (from (1).py merge)
+    # Prevents pytest infinite recursion if repo contains a symlink
+    # pointing back to itself (e.g., /app/repo/repo -> /app/repo)
+    # ============================================================
+    guard_symlink = (
+        "if [ -L /app/repo/repo ] && [ \"$(readlink -f /app/repo/repo)\" = \"/app/repo\" ]; then "
+        "export PYTEST_ADDOPTS=\"${PYTEST_ADDOPTS:-} --ignore=/app/repo/repo\"; "
+        "fi; "
+    )
+    
+    # Build the full command
     full_command = (
         f"source /saved/ENV 2>/dev/null || source /saved/*/ENV 2>/dev/null || true; "
         f"{unset_proxy}"
+        f"{guard_symlink}"
         f"cd {repo_directory} && {test_exec}"
     )
     
@@ -1402,9 +1458,11 @@ def evaluate_instance(
             
             logger.info("Test files reset complete")
             
-            # Run test command
+            # Run test command with specific test targets (F2P + P2P)
+            # This ensures pytest runs only the required tests
             returncode, stdout, stderr = run_test_command(
-                container_name, dataset, timeout=timeout
+                container_name, dataset, timeout=timeout,
+                test_targets=fail_to_pass + pass_to_pass
             )
             
             full_output = stdout + stderr

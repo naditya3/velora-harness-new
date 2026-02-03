@@ -389,18 +389,20 @@ assign_tasks() {
 }
 
 # ============================================
-# RUN TASK ON WORKER
+# RUN TASK ON WORKER (Uses rct.sh for each task)
 # ============================================
 run_task_on_worker() {
   local task_idx="$1"
   local dataset="${DATASET_FILES[$task_idx]}"
   local worker="${TASK_ASSIGNMENTS[$task_idx]}"
   
-  local task_id=$(python3 -c "import json; print(json.load(open('$dataset')).get('instance_id', 'task_$task_idx'))" 2>/dev/null)
+  local task_id
+  task_id=$(python3 -c "import json; print(json.load(open('$dataset')).get('instance_id', 'task_$task_idx'))" 2>/dev/null) || task_id="task_$task_idx"
   
   log_info "Starting task $task_id on $worker"
   
-  local models_str=$(IFS=','; echo "${MODELS[*]}")
+  local models_str
+  models_str=$(IFS=','; echo "${MODELS[*]}")
   
   update_master_status "$task_id" "worker" "\"$worker\""
   update_master_status "$task_id" "status" "\"running\""
@@ -411,36 +413,33 @@ run_task_on_worker() {
     return 0
   fi
   
-  local worker_cmd="cd ${REMOTE_VELORA_PATH} && bash evaluation/benchmarks/multi_swe_bench/scripts/run_task_worker.sh \
-    --dataset $dataset \
+  # Build rct.sh command
+  local timeout_minutes=$((TIMEOUT / 60))
+  local rct_cmd="bash ./evaluation/benchmarks/multi_swe_bench/scripts/rct.sh \
     --models '$models_str' \
-    --pass-at-n $PASS_AT_N \
+    --runs $PASS_AT_N \
     --max-iterations $MAX_ITERATIONS \
-    --timeout $TIMEOUT \
-    --retry-count $RETRY_COUNT"
-  
-  if [ -n "$MASTER_HOST" ]; then
-    worker_cmd="$worker_cmd --master-host $MASTER_HOST --ssh-key $SSH_KEY"
-  fi
+    --timeout $timeout_minutes \
+    --retries $RETRY_COUNT \
+    --instances '$task_id'"
   
   if [ "$worker" = "local" ]; then
     # Run locally
     cd "$VELORA_ROOT"
-    bash evaluation/benchmarks/multi_swe_bench/scripts/run_task_worker.sh \
-      --dataset "$dataset" \
-      --models "$models_str" \
-      --pass-at-n $PASS_AT_N \
-      --max-iterations $MAX_ITERATIONS \
-      --timeout $TIMEOUT \
-      --retry-count $RETRY_COUNT \
-      > "/tmp/task_${task_id}.log" 2>&1 &
+    (
+      source .venv/bin/activate 2>/dev/null || true
+      eval "$rct_cmd"
+      
+      # Update status on completion
+      echo '{"status": "completed", "finished_at": "'$(date -Iseconds)'"}' > "/tmp/worker_status_${task_id}.json"
+    ) > "/tmp/task_${task_id}.log" 2>&1 &
     
     local pid=$!
     log_info "Started local task $task_id (PID: $pid)"
     update_master_status "$task_id" "pid" "$pid"
   else
     # Run on remote worker
-    run_remote "$worker" "nohup $worker_cmd > /tmp/task_${task_id}.log 2>&1 &"
+    run_remote "$worker" "cd ${REMOTE_VELORA_PATH} && source .venv/bin/activate 2>/dev/null; nohup $rct_cmd > /tmp/task_${task_id}.log 2>&1 &"
     log_info "Started remote task $task_id on $worker"
   fi
 }

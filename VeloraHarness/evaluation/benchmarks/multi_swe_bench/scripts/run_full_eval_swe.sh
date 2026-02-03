@@ -691,15 +691,15 @@ echo "Using eval_standardized_swe.py"
 echo "============================================"
 
 # Run the detailed evaluation script
-# IMPORTANT: Use eval_standardized_swe.py from swe-hard/
+# Use eval_pilot2_standardized.py (unified version with all parsers)
 SCRIPT_DIR=$(dirname "$0")
-EVAL_SCRIPT="$SCRIPT_DIR/eval_standardized_swe.py"
+EVAL_SCRIPT="$SCRIPT_DIR/eval_pilot2_standardized.py"
 EVAL_OUTPUT_FILE="${OUTPUT_DIR}/eval_standardized_output.jsonl"
 
 # Verify eval script exists
 if [ ! -f "$EVAL_SCRIPT" ]; then
   echo "ERROR: Evaluation script not found: $EVAL_SCRIPT"
-  echo "Expected location: evaluation/benchmarks/multi_swe_bench/scripts/swe-hard/eval_standardized_swe.py"
+  echo "Expected location: evaluation/benchmarks/multi_swe_bench/scripts/eval_pilot2_standardized.py"
   exit 1
 fi
 
@@ -728,7 +728,7 @@ if [ $EVAL_EXIT -ne 0 ]; then
   exit $EVAL_EXIT
 fi
 
-# Note: eval_standardized_swe.py now creates the full eval_outputs structure:
+# Note: eval_pilot2_standardized.py now creates the full eval_outputs structure:
 #   eval_outputs/
 #   ├── report.json
 #   └── <instance_id>/

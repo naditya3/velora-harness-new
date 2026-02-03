@@ -81,23 +81,13 @@ Before committing changes:
 ## Documentation
 
 Key documentation in `docs/`:
-- `GEMINI_3_PRO_COMPLETE_GUIDE.md` - Complete Gemini 3 Pro integration guide
-- `GPT_CODEX_COMPLETE_GUIDE.md` - Complete GPT-5.2 Codex integration guide
 - `GEMINI_THOUGHT_SIGNATURE_FIX.md` - Gemini 3 multi-turn function calling fix
+- `GPT_CODEX_XHIGH_FIX.md` - GPT-5.2 Codex reasoning integration
 - `DOCKER_BUILD_ISSUES.md` - Cross-platform Docker build guide
 - `XHIGH_REASONING_PROCESS.md` - Step-by-step xhigh usage guide
-- `TROUBLESHOOTING_GUIDE.md` - Common issues and solutions
-
-## Evaluation Scripts
-
-Primary evaluation scripts in `evaluation/benchmarks/multi_swe_bench/scripts/`:
-- `rct.sh` - Main pass@k evaluation runner (TOML + CLI configurable)
-- `run_full_eval_with_s3.sh` - Single instance evaluation
-- `run_batch_master.sh` - Batch orchestration for multi-worker setups
-- `setup_remote_hosts.sh` - EC2 instance setup
 
 ## Import Reference
 
-@docs/GEMINI_3_PRO_COMPLETE_GUIDE.md
-@docs/GPT_CODEX_COMPLETE_GUIDE.md
+@docs/GEMINI_THOUGHT_SIGNATURE_FIX.md
+@docs/GPT_CODEX_XHIGH_FIX.md
 @docs/DOCKER_BUILD_ISSUES.md

@@ -1,0 +1,93 @@
+# RCT - Velora Pass@k Evaluation Configuration
+# =============================================
+# This file configures the RCT evaluation runner for pass@k evaluations.
+#
+# Usage:
+#   ./rct.sh --config rct_config.toml
+#   ./rct.sh --config rct_config.toml --models gemini  # CLI overrides config
+#
+# Note: CLI arguments always override config file values.
+
+# ============================================
+# BATCH SETTINGS
+# ============================================
+[batch]
+# Number of runs per model per task (pass@k)
+pass_at_n = 8
+
+# Maximum agent iterations per trajectory
+max_iterations = 1000
+
+# Timeout per trajectory in seconds (default: 45 minutes = 2700s)
+timeout_per_trajectory = 2700
+
+# Number of retries for failed trajectories
+retry_count = 3
+
+# ============================================
+# LLM MODELS
+# ============================================
+[models]
+# List of model configs to use
+# Options: gemini, claude, gpt (or full config names like llm.gemini3)
+enabled = ["gemini"]
+
+# To use multiple models:
+# enabled = ["gemini", "claude", "gpt"]
+
+# ============================================
+# EC2 INSTANCES (for distributed execution)
+# ============================================
+[instances]
+# List of worker instance hostnames or IPs
+# Leave empty for local execution
+workers = []
+
+# SSH configuration (only needed for remote workers)
+ssh_key = "~/.ssh/velora.pem"
+ssh_user = "ubuntu"
+ssh_port = 22
+
+# Example for distributed execution:
+# workers = ["aws-velora-1", "aws-velora-2"]
+# Or with IPs:
+# workers = ["10.0.0.1", "10.0.0.2"]
+
+# ============================================
+# DATASETS
+# ============================================
+[datasets]
+# Directory containing .jsonl dataset files
+# Relative to VeloraHarness root
+directory = "dataset"
+
+# The script will look for:
+#   1. dataset/instances/*.jsonl (preferred)
+#   2. dataset/*.jsonl (fallback)
+
+# ============================================
+# DOCKER & CLEANUP
+# ============================================
+[cleanup]
+# Clean Docker after tasks (recommended to save disk space)
+docker_cleanup_after_task = true
+
+# Keep base images (only remove runtime images)
+keep_base_images = true
+
+# ============================================
+# OUTPUT SETTINGS
+# ============================================
+[output]
+# Base directory for outputs (relative to VeloraHarness)
+base_dir = "evaluation/evaluation_outputs"
+
+# ============================================
+# ADVANCED SETTINGS
+# ============================================
+[advanced]
+# Maximum parallel workers per instance
+max_parallel_per_instance = 1
+
+# Skip tasks that already have complete outputs
+skip_completed = true
