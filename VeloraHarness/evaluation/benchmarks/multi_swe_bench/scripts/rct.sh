@@ -44,8 +44,8 @@ VELORA_HOME="${SCRIPT_DIR%/evaluation/benchmarks/multi_swe_bench/scripts}"
 get_model_config() {
     local model="$1"
     case "$model" in
-        gemini) echo "llm.gemini3" ;;
-        claude) echo "llm.claude" ;;
+        gemini) echo "llm.gemini" ;;
+        claude) echo "llm.claudeNonR" ;;
         gpt) echo "llm.gpt" ;;
         *) echo "$model" ;;
     esac
