@@ -342,7 +342,9 @@ def get_instruction(instance: pd.Series, metadata: EvalMetadata):
 
 
 # SWE-Lancer monolith image configuration
-USE_SWELANCER_MONOLITH = os.environ.get('USE_SWELANCER_MONOLITH', 'true').lower() == 'true'
+# Default to 'false' to avoid breaking non-RCT benchmarks (SWE-hard, LST, Lite)
+# RCT/LHT evaluations should explicitly set USE_SWELANCER_MONOLITH=true
+USE_SWELANCER_MONOLITH = os.environ.get('USE_SWELANCER_MONOLITH', 'false').lower() == 'true'
 SWELANCER_MONOLITH_IMAGE = os.environ.get('SWELANCER_MONOLITH_IMAGE', 'swelancer/unified:latest')
 
 if USE_SWELANCER_MONOLITH:
@@ -670,7 +672,10 @@ def initialize_runtime(
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
         # Don't fail on symlink creation - it's optional
 
-        action = CmdRunAction(command='source /swe_util/instance_swe_entry.sh')
+        # Export environment variables inline to ensure they're available in the same shell
+        action = CmdRunAction(
+            command=f'export SWE_INSTANCE_ID="{instance["instance_id"]}" && export REPO_NAME="{REPO_NAME}" && source /swe_util/instance_swe_entry.sh'
+        )
         action.set_hard_timeout(600)
         logger.info(action, extra={'msg_type': 'ACTION'})
         obs = runtime.run_action(action)

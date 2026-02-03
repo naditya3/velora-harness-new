@@ -54,6 +54,7 @@ REPO_LOCATIONS=(
     "/home/$REPO_NAME"
     "/testbed"
     "/app/repo"
+    "/repo"
     "/src/$REPO_SHORT_NAME"
     "/go/src/$REPO_SHORT_NAME"
     "/workspace/$REPO_SHORT_NAME"
