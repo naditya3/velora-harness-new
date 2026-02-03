@@ -9,23 +9,21 @@
 ##########################################################################
 
 #################################### Core ####################################
+# General core configurations
+##############################################################################
 [core]
-# Maximum number of iterations (required)
+# Maximum number of iterations
 max_iterations = 500
 
-# Default agent (required)
+# Name of the default agent
 default_agent = "CodeActAgent"
 
-#################################### Sandbox ###################################
-[sandbox]
-# Sandbox timeout in seconds (required)
-timeout = 120
-
 #################################### LLM #####################################
-# Non-Reasoning Models
+# Configuration for LLM models (group name starts with 'llm')
+# NOTE: Set your API keys here or as environment variables
 ##############################################################################
 
-# Claude Sonnet 4.5 (Standard - No Extended Thinking)
+# Claude Sonnet 4.5 - Standard Inference (Non-Reasoning)
 [llm.claudeNonR]
 model = "claude-sonnet-4-5-20250929"
 api_key = "<YOUR_ANTHROPIC_API_KEY>"
@@ -35,7 +33,7 @@ num_retries = 8
 retry_min_wait = 15
 retry_max_wait = 120
 
-# Google Gemini 3 Pro (Standard - No Thinking Level)
+# Google Gemini 3 Pro - Standard Inference (Non-Reasoning)
 [llm.gemini]
 model = "gemini/gemini-3-pro-preview"
 api_key = "<YOUR_GOOGLE_API_KEY>"
@@ -46,12 +44,28 @@ retry_min_wait = 30
 retry_max_wait = 180
 
 #################################### Agent ###################################
+# Configuration for agents (group name starts with 'agent')
+##############################################################################
 [agent]
-# Core agent settings (required)
+# Whether the command tool is enabled
 enable_cmd = true
+
+# Whether the finish tool is enabled
 enable_finish = true
+
+# Whether the standard editor tool is enabled
 enable_editor = true
 
+#################################### Sandbox ###################################
+# Configuration for the sandbox
+##############################################################################
+[sandbox]
+# Sandbox timeout in seconds
+timeout = 120
+
 #################################### Condenser #################################
+# Condensers control how conversation history is managed
+##############################################################################
 [condenser]
 type = "noop"
+
