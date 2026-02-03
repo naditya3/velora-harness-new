@@ -364,10 +364,16 @@ def get_instance_docker_image(instance: pd.Series):
         return task_image
     
     # Check for image_storage_uri (preferred method from dataset)
+    # Skip S3 URIs - those are for downloading tars, not valid Docker image references.
+    # The shell script handles S3 download + docker load + tagging separately.
     image_uri = instance.get('image_storage_uri', '')
     if image_uri and pd.notna(image_uri) and str(image_uri).strip():
-        logger.info(f'Using image_storage_uri from dataset: {image_uri}')
-        return str(image_uri).strip()
+        image_uri_str = str(image_uri).strip()
+        if not image_uri_str.startswith('s3://'):
+            logger.info(f'Using image_storage_uri from dataset: {image_uri_str}')
+            return image_uri_str
+        else:
+            logger.info(f'Skipping S3 image_storage_uri (not a Docker image ref): {image_uri_str}')
     
     # Fallback to constructing image name
     if LANGUAGE == 'python':
