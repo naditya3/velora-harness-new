@@ -1,0 +1,57 @@
+###################### VeloraHarness Configuration ######################
+#
+# Jaeger Repository - Minimal Configuration
+# Models: Claude Sonnet 4.5 (Non-Reasoning), Gemini 3 Pro (Non-Reasoning)
+#
+# SETUP: Copy this file to config.toml and add your API keys
+#   cp config.toml.jaeger config.toml
+#
+##########################################################################
+
+#################################### Core ####################################
+[core]
+# Maximum number of iterations (required)
+max_iterations = 500
+
+# Default agent (required)
+default_agent = "CodeActAgent"
+
+#################################### Sandbox ###################################
+[sandbox]
+# Sandbox timeout in seconds (required)
+timeout = 120
+
+#################################### LLM #####################################
+# Non-Reasoning Models
+##############################################################################
+
+# Claude Sonnet 4.5 (Standard - No Extended Thinking)
+[llm.claudeNonR]
+model = "claude-sonnet-4-5-20250929"
+api_key = "<YOUR_ANTHROPIC_API_KEY>"
+temperature = 1.0
+timeout = 600
+num_retries = 8
+retry_min_wait = 15
+retry_max_wait = 120
+
+# Google Gemini 3 Pro (Standard - No Thinking Level)
+[llm.gemini]
+model = "gemini/gemini-3-pro-preview"
+api_key = "<YOUR_GOOGLE_API_KEY>"
+temperature = 1.0
+timeout = 600
+num_retries = 12
+retry_min_wait = 30
+retry_max_wait = 180
+
+#################################### Agent ###################################
+[agent]
+# Core agent settings (required)
+enable_cmd = true
+enable_finish = true
+enable_editor = true
+
+#################################### Condenser #################################
+[condenser]
+type = "noop"
