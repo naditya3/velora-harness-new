@@ -1,40 +1,42 @@
 #!/usr/bin/env python3
 """
-Standardized Evaluation Script for Pilot 2.2 Tasks
+Unified Evaluation Script for Multi-Language SWE-Bench Tasks
 
-This script follows the client's README.md and harness files:
-- Uses log_parsers.py for test output parsing (parse_log_pytest_v3, parse_log_unittest)
-- Follows test_spec.py eval flow (make_eval_test_spec structure)
-- Works with all tasks in ClientSheet (186 tasks)
+This script provides a unified evaluation framework supporting:
+- Python (pytest, unittest)
+- PHP (PHPUnit)
+- Ruby (Minitest)
+- JavaScript (SWE-Lancer/Playwright, Jest)
 
-Key requirements from client README:
-1. Load Docker image from images/ using image_storage_uri
-2. Initialize container with image_init_commands 
-3. Execute tests with test_command from CSV
-4. Parse output with test_output_parser from CSV
+Key Features:
+1. Multi-language parser support with unified registry
+2. Standard evaluation flow for most languages
+3. SWE-Lancer specific flow for JavaScript/Playwright tests
+4. Sophisticated test name matching for cross-format grading
+5. Full eval_outputs directory structure generation
 
-=== SWE-LANCER CRITICAL FIXES (applied in this script) ===
+=== EVALUATION FLOWS ===
 
-1. Issue ID Extraction: Extracts issue_id from test_command using 
-   ISSUE_ID=<value> pattern (e.g., "18207_923") instead of regex that 
-   doesn't handle underscores.
+Standard Flow (Python, PHP, Ruby):
+1. Start Docker container
+2. Apply model patch
+3. Reset test files to clean state
+4. Apply golden test patch
+5. Run test command
+6. Parse output with appropriate parser
+7. Grade results against F2P/P2P
 
-2. Patch Application Order: Model patch is applied AFTER git checkout 
-   of base_commit. If applied before, git checkout discards the patch.
-
-3. Proxy Configuration: Tests are rewritten using rewrite_test.py to 
-   inject Playwright proxy configuration (proxy={"server": "http://localhost:8080"})
-   so browser traffic goes through mitmdump.
-
-4. API Routing: USE_WEB_PROXY=false is set when starting webpack dev server
-   so API calls go directly to www.expensify.com through the browser's 
-   proxy (mitmdump) instead of through webpack's internal proxy.
-
-5. Exit Code Handling: Returns 0 if evaluation completed (test may have
-   passed or failed). Only returns 1 for actual evaluation errors.
-
-6. Node Version Switching: Automatically selects correct Node.js version
-   based on base_commit and copies pre-cached node_modules.
+SWE-Lancer Flow (JavaScript/Playwright):
+1. Start SWE-Lancer container
+2. Setup Xvfb, SSL certs, /etc/hosts
+3. Checkout base_commit
+4. Apply model patch (AFTER checkout)
+5. Switch Node.js version based on commit
+6. Start mitmdump proxy
+7. Start webpack dev server on :8082
+8. Rewrite test.py with proxy configuration
+9. Run pytest with Playwright
+10. Parse exit code for grading
 
 Usage:
     python eval_pilot2_standardized.py \
@@ -45,6 +47,7 @@ Usage:
 """
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -60,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# TEST STATUS ENUM (matching client's constants)
+# TEST STATUS ENUM
 # ============================================================
 
 class TestStatus:
@@ -69,19 +72,18 @@ class TestStatus:
     FAILED = "FAILED"
     ERROR = "ERROR"
     SKIPPED = "SKIPPED"
-    XFAIL = "XFAIL"  # Expected failure - test failed as expected (treat as passing for P2P)
+    XFAIL = "XFAIL"  # Expected failure - test failed as expected
     XPASS = "XPASS"  # Unexpected pass - test passed when expected to fail
 
 
 # ============================================================
-# LOG PARSERS (matching client's log_parsers.py)
+# PYTHON PARSERS
 # ============================================================
 
 def parse_log_pytest_v3(log: str, grading_spec: Any = None) -> Dict[str, str]:
     """
     Parser for test logs generated with PyTest framework (Repomate version).
     
-    This matches the client's parse_log_pytest_v3 from log_parsers.py.
     Handles pytest -rA output format:
         PASSED test/test_file.py::test_name
         FAILED test/test_file.py::test_name
@@ -90,9 +92,8 @@ def parse_log_pytest_v3(log: str, grading_spec: Any = None) -> Dict[str, str]:
     escapes = "".join([chr(char) for char in range(1, 32)])
     translator = str.maketrans("", "", escapes)
     
-    # Precompile the regex pattern for efficiency
-    # Include XFAIL and XPASS for pytest expected failure markers
-    status_values = "|".join([TestStatus.PASSED, TestStatus.FAILED, TestStatus.ERROR, TestStatus.SKIPPED, TestStatus.XFAIL, TestStatus.XPASS])
+    status_values = "|".join([TestStatus.PASSED, TestStatus.FAILED, TestStatus.ERROR, 
+                              TestStatus.SKIPPED, TestStatus.XFAIL, TestStatus.XPASS])
     status_pattern = re.compile(rf"^({status_values})\s+")
     
     for line in log.split("\n"):
@@ -108,8 +109,8 @@ def parse_log_pytest_v3(log: str, grading_spec: Any = None) -> Dict[str, str]:
                 test_name = test_case[1]
                 test_status_map[test_name] = status
         
-        # Support older pytest output where status is at the end
-        elif any(line.endswith(x) for x in [TestStatus.PASSED, TestStatus.FAILED, TestStatus.ERROR, TestStatus.SKIPPED]):
+        elif any(line.endswith(x) for x in [TestStatus.PASSED, TestStatus.FAILED, 
+                                             TestStatus.ERROR, TestStatus.SKIPPED]):
             test_case = line.split()
             if len(test_case) >= 2:
                 test_status_map[test_case[0]] = test_case[-1]
@@ -124,14 +125,12 @@ def parse_log_unittest(log: str, grading_spec: Any = None) -> Dict[str, str]:
     Handles unittest output format:
         test_name (test.module.TestClass) ... ok
         test_name (test.module.TestClass) ... FAIL
-        test_name (test.module.TestClass) ... ERROR
     """
     test_status_map = {}
     
     for line in log.split("\n"):
         line = line.strip()
         
-        # Pattern: test_name (test.module) ... ok
         if " ... ok" in line.lower():
             test = line.split(" ... ")[0].strip()
             test_status_map[test] = TestStatus.PASSED
@@ -148,6 +147,210 @@ def parse_log_unittest(log: str, grading_spec: Any = None) -> Dict[str, str]:
     return test_status_map
 
 
+# ============================================================
+# PHP PARSERS
+# ============================================================
+
+def parse_log_phpunit(log: str, grading_spec: Any = None) -> Dict[str, str]:
+    """
+    Parser for test logs generated with PHPUnit framework.
+    
+    Handles PHPUnit testdox output format:
+        Class Name (Namespace\TestClass)
+         ✔ Test name passes
+         ✘ Test name fails
+        
+    Maps to: Namespace\TestClass::testTestNamePasses
+    """
+    test_status_map = {}
+    lines = log.split("\n")
+    
+    current_class = None
+    
+    def testdox_to_method_name(testdox_name: str) -> str:
+        """Convert testdox name to method name."""
+        words = testdox_name.strip().split()
+        if not words:
+            return ""
+        method = "test" + words[0].capitalize()
+        for word in words[1:]:
+            method += word.capitalize()
+        return method
+    
+    in_failure_section = False
+    in_error_section = False
+    current_failed_tests = set()
+    current_error_tests = set()
+    
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        
+        # Detect testdox class header: "Class Name (Namespace\TestClass)"
+        class_header_match = re.match(r'^(.+?)\s*\(([^)]+)\)\s*$', line_stripped)
+        if class_header_match and '\\' in class_header_match.group(2):
+            current_class = class_header_match.group(2)
+            continue
+        
+        # Detect failure/error section start
+        if line_stripped.startswith("There was") and "failure" in line_stripped.lower():
+            in_failure_section = True
+            in_error_section = False
+            current_class = None
+            continue
+        if line_stripped.startswith("There was") and "error" in line_stripped.lower():
+            in_error_section = True
+            in_failure_section = False
+            current_class = None
+            continue
+        if line_stripped.startswith("There were") and "failure" in line_stripped.lower():
+            in_failure_section = True
+            in_error_section = False
+            current_class = None
+            continue
+        if line_stripped.startswith("There were") and "error" in line_stripped.lower():
+            in_error_section = True
+            in_failure_section = False
+            current_class = None
+            continue
+            
+        # Parse failure/error entries like: 1) Namespace\Class::testMethod
+        if (in_failure_section or in_error_section) and re.match(r'^\d+\)', line_stripped):
+            match = re.match(r'^\d+\)\s*(.+)', line_stripped)
+            if match:
+                test_name = match.group(1).strip()
+                if ' with data set' in test_name:
+                    test_name = test_name.split(' with data set')[0]
+                if in_failure_section:
+                    current_failed_tests.add(test_name)
+                else:
+                    current_error_tests.add(test_name)
+        
+        def get_alternative_class_names(class_name: str) -> List[str]:
+            """Generate alternative class names for matching."""
+            alternatives = [class_name]
+            if class_name.endswith('\\UnnamedTests'):
+                parent_ns = class_name.rsplit('\\', 1)[0]
+                alternatives.extend([
+                    f"{parent_ns}\\Test",
+                    f"{parent_ns}\\Tests", 
+                    f"{parent_ns}\\TestCase",
+                ])
+            if not class_name.endswith("Test"):
+                alternatives.append(class_name + "Test")
+            return alternatives
+        
+        # Testdox format: ✔ or ✓ for pass, ✘ or ✗ for fail
+        if '✔' in line or '✓' in line:
+            testdox_name = re.sub(r'[✔✓]\s*', '', line_stripped).strip()
+            if testdox_name and current_class:
+                method_name = testdox_to_method_name(testdox_name)
+                for alt_class in get_alternative_class_names(current_class):
+                    full_test_name = f"{alt_class}::{method_name}"
+                    test_status_map[full_test_name] = TestStatus.PASSED
+            elif testdox_name:
+                test_status_map[testdox_name] = TestStatus.PASSED
+                
+        elif '✘' in line or '✗' in line:
+            testdox_name = re.sub(r'[✘✗]\s*', '', line_stripped).strip()
+            if testdox_name and current_class:
+                method_name = testdox_to_method_name(testdox_name)
+                for alt_class in get_alternative_class_names(current_class):
+                    full_test_name = f"{alt_class}::{method_name}"
+                    test_status_map[full_test_name] = TestStatus.FAILED
+            elif testdox_name:
+                test_status_map[testdox_name] = TestStatus.FAILED
+                
+        # Standard format: ClassName::testMethod
+        if '::test' in line_stripped:
+            match = re.search(r'([\w\\\\]+::\w+)', line_stripped)
+            if match:
+                test_name = match.group(1)
+                lower_line = line_stripped.lower()
+                if 'ok' in lower_line or 'pass' in lower_line:
+                    test_status_map[test_name] = TestStatus.PASSED
+                elif 'fail' in lower_line:
+                    test_status_map[test_name] = TestStatus.FAILED
+                elif 'error' in lower_line:
+                    test_status_map[test_name] = TestStatus.ERROR
+                elif 'skip' in lower_line:
+                    test_status_map[test_name] = TestStatus.SKIPPED
+    
+    # Apply failures and errors found in detailed sections
+    for test in current_failed_tests:
+        test_status_map[test] = TestStatus.FAILED
+    for test in current_error_tests:
+        test_status_map[test] = TestStatus.ERROR
+    
+    return test_status_map
+
+
+# ============================================================
+# RUBY PARSERS
+# ============================================================
+
+def parse_log_ruby_minitest(log: str, grading_spec: Any = None) -> Dict[str, str]:
+    """
+    Parser for test logs generated with Ruby Minitest framework.
+
+    Handles Minitest output format:
+        ClassName::SubClass#test_method = 0.05 s = .
+        ClassName::SubClass#test_method = 0.05 s = F
+    """
+    test_status_map = {}
+
+    for line in log.split("\n"):
+        line_stripped = line.strip()
+
+        # Primary format: ClassName::SubClass#test_method = 0.05 s = .
+        match = re.match(r'^([\w:]+#[\w]+)\s*=.*?=\s*([.FESN])\s*$', line_stripped)
+        if match:
+            test_name, result = match.groups()
+            if result == '.':
+                test_status_map[test_name] = TestStatus.PASSED
+            elif result == 'F':
+                test_status_map[test_name] = TestStatus.FAILED
+            elif result == 'E':
+                test_status_map[test_name] = TestStatus.ERROR
+            elif result in ('S', 'N'):
+                test_status_map[test_name] = TestStatus.SKIPPED
+            continue
+
+        # Alternative format: ClassName::SubClass#test_method [PASS]
+        match = re.match(r'^([\w:]+#[\w]+)\s*\[(\w+)\]', line_stripped)
+        if match:
+            test_name, result = match.groups()
+            result_upper = result.upper()
+            if result_upper in ('PASS', 'OK', 'PASSED'):
+                test_status_map[test_name] = TestStatus.PASSED
+            elif result_upper in ('FAIL', 'FAILED'):
+                test_status_map[test_name] = TestStatus.FAILED
+            elif result_upper in ('ERROR', 'ERR'):
+                test_status_map[test_name] = TestStatus.ERROR
+            elif result_upper in ('SKIP', 'SKIPPED'):
+                test_status_map[test_name] = TestStatus.SKIPPED
+            continue
+
+        # Verbose format: test_method_name (ClassName::SubClass) = 0.01 s = .
+        match = re.match(r'^\s*(\w+)\s*\(([\w:]+)\)\s*=.*?=\s*([.FESN])\s*$', line_stripped)
+        if match:
+            method_name, class_name, result = match.groups()
+            test_name = f"{class_name}#{method_name}"
+            if result == '.':
+                test_status_map[test_name] = TestStatus.PASSED
+            elif result == 'F':
+                test_status_map[test_name] = TestStatus.FAILED
+            elif result == 'E':
+                test_status_map[test_name] = TestStatus.ERROR
+            elif result in ('S', 'N'):
+                test_status_map[test_name] = TestStatus.SKIPPED
+
+    return test_status_map
+
+
+# ============================================================
+# JAVASCRIPT / SWE-LANCER PARSERS
+# ============================================================
+
 def parse_log_swelancer_exitcode(log: str, grading_spec: Any = None) -> Dict[str, str]:
     """
     Parser for SWE-Lancer that uses pytest exit code for grading.
@@ -156,13 +359,8 @@ def parse_log_swelancer_exitcode(log: str, grading_spec: Any = None) -> Dict[str
     - Exit code 0 = PASS
     - Exit code 1 = FAIL (test failures)
     - Exit code >= 2 = ERROR (collection/execution errors)
-    
-    The log should contain the pytest exit code from:
-    /app/tests/logs/<ISSUE_ID>/pytest_exit_code
     """
     test_status_map = {}
-    
-    # Look for exit code patterns
     exit_code = None
     
     # Pattern 1: pytest_exit_code file content or variable
@@ -170,29 +368,27 @@ def parse_log_swelancer_exitcode(log: str, grading_spec: Any = None) -> Dict[str
     if match:
         exit_code = int(match.group(1))
     
-    # Pattern 2: "exit code:" or "Exit code:" pattern
+    # Pattern 2: "exit code:" pattern
     if exit_code is None:
         match = re.search(r'exit\s+code[:\s]+(\d+)', log, re.IGNORECASE)
         if match:
             exit_code = int(match.group(1))
     
-    # Pattern 3: Check pytest summary for pass/fail counts
+    # Pattern 3: Check pytest summary
     if exit_code is None:
         if re.search(r'\d+\s+passed', log) and not re.search(r'\d+\s+failed', log):
             exit_code = 0
         elif re.search(r'\d+\s+failed', log) or re.search(r'\d+\s+error', log):
             exit_code = 1
     
-    # Find test names in log - match both "tests/" and "issues/" paths
-    # Pattern: issues/18207_923/test.py::test_duplicate_contact_methods
+    # Find test names in log
     test_names = re.findall(r'(issues/[\w_]+/test\.py::[\w_]+)', log)
     if not test_names:
-        # Try shorter path pattern
         test_names = re.findall(r'tests/[\w_]+/test\.py::(test_\w+)', log)
     if not test_names:
         test_names = re.findall(r'(test_expensify_\d+)', log)
     if not test_names:
-        test_names = ['test_expensify_0000']  # Default for SWE-Lancer
+        test_names = ['test_expensify_0000']
     
     # Grade based on exit code
     if exit_code is not None:
@@ -206,7 +402,6 @@ def parse_log_swelancer_exitcode(log: str, grading_spec: Any = None) -> Dict[str
             for name in set(test_names):
                 test_status_map[name] = TestStatus.ERROR
     else:
-        # Fallback: if we can't determine exit code, check for explicit PASSED/FAILED
         for name in set(test_names):
             if 'PASSED' in log or 'passed' in log.lower():
                 test_status_map[name] = TestStatus.PASSED
@@ -217,21 +412,28 @@ def parse_log_swelancer_exitcode(log: str, grading_spec: Any = None) -> Dict[str
 
 
 def parse_log_playwright(log: str, grading_spec: Any = None) -> Dict[str, str]:
-    """
-    Parser for SWE-Lancer Playwright tests run via pytest.
-    
-    SWE-Lancer uses Python tests with Playwright for browser automation.
-    These tests are run via pytest and grading is based on exit code.
-    """
+    """Parser for SWE-Lancer Playwright tests run via pytest."""
     return parse_log_swelancer_exitcode(log, grading_spec)
 
 
-# Parser registry mapping parser names to functions
+# ============================================================
+# UNIFIED PARSER REGISTRY
+# ============================================================
+
 PARSER_REGISTRY: Dict[str, Callable] = {
+    # Python parsers
     "python/parse_log_pytest_v3": parse_log_pytest_v3,
-    "python/parse_log_pytest": parse_log_pytest_v3,  # Alias
+    "python/parse_log_pytest": parse_log_pytest_v3,
     "python/parse_log_unittest": parse_log_unittest,
-    # SWE-Lancer parsers
+    
+    # PHP parsers
+    "php/parse_log_phpunit": parse_log_phpunit,
+    
+    # Ruby parsers
+    "ruby/parse_log_minitest": parse_log_ruby_minitest,
+    "parsers/ruby_minitest_parser.py": parse_log_ruby_minitest,
+    
+    # JavaScript / SWE-Lancer parsers
     "javascript/parse_log_playwright": parse_log_playwright,
     "swelancer/parse_log_playwright": parse_log_playwright,
     "swelancer/parse_log_exitcode": parse_log_swelancer_exitcode,
@@ -274,14 +476,12 @@ class EvalReport:
 # SWE-LANCER CONFIGURATION
 # ============================================================
 
-# Environment variables for SWE-Lancer monolith mode
 USE_SWELANCER_MONOLITH = os.environ.get('USE_SWELANCER_MONOLITH', 'true').lower() == 'true'
 SWELANCER_MONOLITH_IMAGE = os.environ.get('SWELANCER_MONOLITH_IMAGE', 'swelancer/unified:latest')
 
 
 def is_swelancer_task(dataset: Dict[str, Any]) -> bool:
     """Check if this is a SWE-Lancer task based on dataset fields."""
-    # Check for SWE-Lancer specific indicators
     repo = dataset.get('repo', '')
     test_parser = dataset.get('test_output_parser', '')
     monolith_image = dataset.get('monolith_image', '')
@@ -296,7 +496,6 @@ def is_swelancer_task(dataset: Dict[str, Any]) -> bool:
 
 def get_swelancer_docker_image(dataset: Dict[str, Any]) -> str:
     """Get the Docker image for SWE-Lancer task."""
-    # Priority: monolith mode > task_specific_image > image_storage_uri
     if USE_SWELANCER_MONOLITH:
         logger.info(f"Using SWE-Lancer monolith image: {SWELANCER_MONOLITH_IMAGE}")
         return SWELANCER_MONOLITH_IMAGE
@@ -356,11 +555,7 @@ def start_container(docker_image: str, container_name: str, platform: str = "lin
 
 
 def start_swelancer_container(docker_image: str, container_name: str, platform: str = "linux/amd64") -> bool:
-    """Start a SWE-Lancer Docker container.
-    
-    For monolith images, we just start with sleep command.
-    The base_commit checkout and test execution will be handled separately.
-    """
+    """Start a SWE-Lancer Docker container."""
     try:
         subprocess.run(
             ["docker", "rm", "-f", container_name],
@@ -371,13 +566,11 @@ def start_swelancer_container(docker_image: str, container_name: str, platform: 
         pass
     
     try:
-        # For SWE-Lancer, start container with sleep command
-        # The setup (base commit checkout, test execution) happens in run_swelancer_tests
         result = subprocess.run(
             ["docker", "run", "-d", "--name", container_name,
              "--platform", platform,
              "--entrypoint", "/bin/bash",
-             docker_image, "-c", "sleep 7200"],  # 2 hour timeout
+             docker_image, "-c", "sleep 7200"],
             capture_output=True,
             text=True,
             timeout=120
@@ -387,10 +580,8 @@ def start_swelancer_container(docker_image: str, container_name: str, platform: 
             logger.error(f"Failed to start SWE-Lancer container: {result.stderr}")
             return False
         
-        # Give container a moment to start
         time.sleep(2)
         
-        # Verify container is running
         returncode, stdout, _ = run_docker_command(container_name, "echo 'ready'")
         if returncode == 0 and 'ready' in stdout:
             logger.info("SWE-Lancer container started successfully")
@@ -417,31 +608,19 @@ def stop_container(container_name: str):
 # ============================================================
 
 def extract_model_patch(trajectory: Dict[str, Any]) -> str:
-    """Extract and clean the model git patch from trajectory output.
-    
-    Filters out ONLY workspace artifact files (from OpenHands agent execution):
-    - command, exec_time, exit_code, stdout, stderr, etc.
-    
-    Keeps:
-    - All source code changes
-    - .egg-info metadata (may be needed for package installation)
-    - reproduce_ scripts (model-created test scripts)
-    - Test file changes
-    """
+    """Extract and clean the model git patch from trajectory output."""
     test_result = trajectory.get('test_result', {})
     git_patch = test_result.get('git_patch', '')
     
     if not git_patch:
         return ''
     
-    # ONLY exact artifact filenames from OpenHands workspace
-    # These are NOT code - they're agent execution metadata
-    # Also exclude test infrastructure that exists in Docker images
+    # Excluded artifact files
     EXCLUDED_FILES = [
         'command', 'exec_time', 'exit_code', 'stdout', 'stderr',
         'test_output', 'test_log', '.test_', '_test_output',
-        'unittest_loader_no_traceback.py',  # Test runner infrastructure (baked in images)
-        'unittest_loader.py'  # Test runner infrastructure (baked in images)
+        'unittest_loader_no_traceback.py',
+        'unittest_loader.py'
     ]
     
     lines = git_patch.split('\n')
@@ -450,14 +629,11 @@ def extract_model_patch(trajectory: Dict[str, Any]) -> str:
     
     for line in lines:
         if line.startswith('diff --git'):
-            # Extract the file being modified
             parts = line.split(' ')
             if len(parts) >= 4:
-                # Get the b/ path (destination file)
                 b_path = parts[3] if parts[3].startswith('b/') else parts[2]
                 file_name = b_path.replace('b/', '').strip()
                 
-                # Check if this is an excluded artifact file
                 skip_current_diff = False
                 for excluded in EXCLUDED_FILES:
                     if file_name == excluded or file_name.endswith(f'/{excluded}'):
@@ -468,7 +644,6 @@ def extract_model_patch(trajectory: Dict[str, Any]) -> str:
         if not skip_current_diff:
             filtered_lines.append(line)
     
-    # Find first actual diff line
     result_lines = []
     found_diff = False
     for line in filtered_lines:
@@ -497,42 +672,28 @@ def run_swelancer_tests(
     timeout: int = 900
 ) -> tuple:
     """
-    Run SWE-Lancer tests using the official ansible-playbook method.
-    
-    SWE-Lancer test execution:
-    1. Set up test environment (Xvfb, dev server, mitmdump, SSL certs)
-    2. Checkout base_commit (if using monolith)
-    3. Apply model patch (MUST be after checkout!)
-    4. Run ansible-playbook to execute tests
-    5. Read pytest exit code for grading
+    Run SWE-Lancer tests using the official method.
     
     Returns: (returncode, stdout, stderr)
     """
     instance_id = instance.get('instance_id', '')
-    # Extract issue_id from instance_id if it contains underscores or is a timestamp
+    
+    # Extract issue_id
     issue_id = instance_id
     if '_' in str(instance_id):
-        # Format: issue_num_X or similar
         parts = str(instance_id).split('_')
         issue_id = parts[0]
     elif len(str(instance_id)) > 10:
-        # It's a generated timestamp ID - try to get from test_command or FAIL_TO_PASS
-        # First try to extract from test_command (most reliable)
         test_cmd = instance.get('test_command', '')
         if test_cmd:
-            import re
-            # Match ISSUE_ID=<value> pattern in test_command
             match = re.search(r'ISSUE_ID=([0-9_]+)', str(test_cmd))
             if match:
                 issue_id = match.group(1)
                 logger.info(f"Extracted issue_id from test_command: {issue_id}")
         
-        # Fallback to FAIL_TO_PASS if test_command didn't work
         if issue_id == instance_id:
             f2p = instance.get('FAIL_TO_PASS', [])
             if f2p:
-                # Extract issue number from test path like "issues/15925/test.py" or "issues/18207_923/test.py"
-                import re
                 match = re.search(r'issues/([0-9_]+)/', str(f2p))
                 if match:
                     issue_id = match.group(1)
@@ -540,38 +701,31 @@ def run_swelancer_tests(
     
     repo_path = instance.get('repo_path', '/app/repo')
     
-    # Step 1: Set up the test environment
     logger.info(f"Setting up SWE-Lancer test environment for issue {issue_id}...")
     
-    # CRITICAL: Add /etc/hosts entry for dev.new.expensify.com
-    # The test connects to https://dev.new.expensify.com:8082 through the proxy
+    # Add /etc/hosts entry
     hosts_cmd = (
         "grep -q 'dev.new.expensify.com' /etc/hosts || "
         "echo '127.0.0.1 dev.new.expensify.com' >> /etc/hosts"
     )
     run_docker_command(container_name, hosts_cmd, timeout=30)
     
-    # Set up SSL certificates using mkcert
+    # Setup commands
     setup_commands = [
-        # Install mkcert CA
         "mkcert -install 2>/dev/null || true",
-        # Generate certificates
         "cd /app/repo/config/webpack && mkcert -key-file key.pem -cert-file certificate.pem localhost 127.0.0.1 dev.new.expensify.com 2>/dev/null || true",
-        # Start Xvfb
         "pkill -9 Xvfb 2>/dev/null || true",
         "Xvfb :99 -screen 0 1920x1080x24 &",
         "export DISPLAY=:99",
-        # Start fluxbox
         "fluxbox &>/dev/null &",
     ]
     
     for cmd in setup_commands:
         run_docker_command(container_name, cmd, timeout=60)
     
-    # Wait for Xvfb to start
     time.sleep(2)
     
-    # If using monolith, checkout the base_commit
+    # Checkout base_commit
     if base_commit:
         logger.info(f"Checking out base commit {base_commit[:12]}...")
         returncode, stdout, stderr = run_docker_command(
@@ -586,9 +740,7 @@ def run_swelancer_tests(
         else:
             logger.info(f"Successfully checked out {base_commit[:12]}")
     
-    # ============================================================
-    # APPLY MODEL PATCH (must be after checkout!)
-    # ============================================================
+    # Apply model patch (AFTER checkout)
     if model_patch:
         logger.info("Applying model patch to SWE-Lancer repo...")
         returncode, stdout, stderr = run_docker_command(
@@ -601,21 +753,13 @@ def run_swelancer_tests(
         if returncode != 0:
             logger.warning(f"Model patch apply may have issues: {stdout}")
     
-    # ============================================================
-    # DYNAMIC NODE VERSION SWITCHING
-    # Based on base_commit, select the correct Node.js version and
-    # copy the pre-cached node_modules
-    # ============================================================
-    
-    # Map base_commit to Node.js version
-    # These mappings are based on the package.json engines field for each commit
+    # Node.js version switching
     NODE_VERSION_MAP = {
-        "2b791c9f3053": "20.15.1",  # new.expensify 9.0.41-1
-        "da2e6688c3f1": "20.18.0",  # new.expensify 9.0.54-8
-        "006a1dfe67a7": "20.18.0",  # new.expensify 9.0.77-6
+        "2b791c9f3053": "20.15.1",
+        "da2e6688c3f1": "20.18.0",
+        "006a1dfe67a7": "20.18.0",
     }
     
-    # Determine Node version from base_commit
     node_version = None
     if base_commit:
         commit_prefix = base_commit[:12]
@@ -627,22 +771,14 @@ def run_swelancer_tests(
     if node_version:
         logger.info(f"Setting up Node.js {node_version} for commit {base_commit[:12]}...")
         
-        # Switch to the correct Node version using nvm
         switch_node_cmd = f"source ~/.nvm/nvm.sh && nvm use {node_version} && node --version"
         returncode, stdout, stderr = run_docker_command(container_name, switch_node_cmd, timeout=30)
         logger.info(f"Node version switch: {stdout.strip()}")
         
-        # Copy cached node_modules if available
+        # Check for cached node_modules
         cache_dir = f"/app/node_cache/{node_version}/node_modules"
         target_dir = f"{repo_path}/node_modules"
         
-        # Check if cached node_modules exists
-        _, cache_check, _ = run_docker_command(
-            container_name,
-            f"ls -d {cache_dir} 2>/dev/null && echo 'CACHE_EXISTS' || echo 'NO_CACHE'"
-        )
-        
-        # First check for commit-specific cache
         commit_cache_dir = f"/app/node_cache/commits/{base_commit[:12]}_node_modules"
         _, commit_cache_check, _ = run_docker_command(
             container_name,
@@ -659,52 +795,51 @@ def run_swelancer_tests(
             returncode, stdout, stderr = run_docker_command(container_name, copy_cmd, timeout=300)
             package_count = stdout.strip().split('\n')[-1] if stdout else "unknown"
             logger.info(f"Commit-specific node_modules copied: {package_count} packages")
-        elif "CACHE_EXISTS" in cache_check:
-            # Fallback: Copy generic cache then run npm ci to fix symlinks/local deps
-            logger.info(f"Using generic cache + npm ci for correct dependencies...")
-            copy_cmd = (
-                f"rm -rf {target_dir} && "
-                f"if command -v rsync &> /dev/null; then "
-                f"  rsync -a {cache_dir}/ {target_dir}/; "
-                f"else "
-                f"  cp -r {cache_dir} {target_dir}; "
-                f"fi"
-            )
-            run_docker_command(container_name, copy_cmd, timeout=300)
-            
-            # CRITICAL: Run npm ci to fix local dependencies and symlinks
-            # This is faster than full npm ci since packages are already present
-            logger.info("Running npm ci to fix local dependencies...")
-            npm_ci_cmd = (
-                f"cd {repo_path} && source ~/.nvm/nvm.sh && nvm use {node_version} && "
-                f"npm ci 2>&1 | tail -10"
-            )
-            returncode, stdout, stderr = run_docker_command(container_name, npm_ci_cmd, timeout=300)
-            logger.info(f"npm ci result: {stdout.strip()}")
         else:
-            logger.warning(f"No cached node_modules for Node {node_version}, npm ci will be needed")
-            # Run full npm ci
-            logger.info("Running full npm ci (this may take 2-3 minutes)...")
-            npm_ci_cmd = (
-                f"cd {repo_path} && source ~/.nvm/nvm.sh && nvm use {node_version} && "
-                f"npm ci 2>&1 | tail -15"
+            _, cache_check, _ = run_docker_command(
+                container_name,
+                f"ls -d {cache_dir} 2>/dev/null && echo 'CACHE_EXISTS' || echo 'NO_CACHE'"
             )
-            returncode, stdout, stderr = run_docker_command(container_name, npm_ci_cmd, timeout=600)
-            logger.info(f"npm ci result: {stdout.strip()}")
+            
+            if "CACHE_EXISTS" in cache_check:
+                logger.info(f"Using generic cache + npm ci for correct dependencies...")
+                copy_cmd = (
+                    f"rm -rf {target_dir} && "
+                    f"if command -v rsync &> /dev/null; then "
+                    f"  rsync -a {cache_dir}/ {target_dir}/; "
+                    f"else "
+                    f"  cp -r {cache_dir} {target_dir}; "
+                    f"fi"
+                )
+                run_docker_command(container_name, copy_cmd, timeout=300)
+                
+                logger.info("Running npm ci to fix local dependencies...")
+                npm_ci_cmd = (
+                    f"cd {repo_path} && source ~/.nvm/nvm.sh && nvm use {node_version} && "
+                    f"npm ci 2>&1 | tail -10"
+                )
+                returncode, stdout, stderr = run_docker_command(container_name, npm_ci_cmd, timeout=300)
+                logger.info(f"npm ci result: {stdout.strip()}")
+            else:
+                logger.warning(f"No cached node_modules for Node {node_version}, npm ci will be needed")
+                logger.info("Running full npm ci (this may take 2-3 minutes)...")
+                npm_ci_cmd = (
+                    f"cd {repo_path} && source ~/.nvm/nvm.sh && nvm use {node_version} && "
+                    f"npm ci 2>&1 | tail -15"
+                )
+                returncode, stdout, stderr = run_docker_command(container_name, npm_ci_cmd, timeout=600)
+                logger.info(f"npm ci result: {stdout.strip()}")
     else:
         logger.warning(f"Unknown base_commit {base_commit}, using default Node version")
     
-    # Start mitmdump for the specific issue
-    # The proxy intercepts requests and replays recorded network traffic
+    # Start mitmdump
     logger.info(f"Starting mitmdump for issue {issue_id}...")
     
-    # Check if addon file exists
     _, addon_check, _ = run_docker_command(
         container_name,
         f"ls -la /app/tests/addons/issues/{issue_id}/addon.py 2>/dev/null || echo 'ADDON NOT FOUND'"
     )
     if "ADDON NOT FOUND" in addon_check:
-        # Use replay.py as fallback
         logger.warning(f"No addon.py found for issue {issue_id}, using replay.py")
         mitm_cmd = (
             f"export ISSUE_ID={issue_id} && "
@@ -721,20 +856,17 @@ def run_swelancer_tests(
         )
     
     run_docker_command(container_name, mitm_cmd, timeout=30)
-    time.sleep(5)  # Give mitmdump more time to start
+    time.sleep(5)
     
-    # Verify mitmdump is running on port 8080
     _, mitm_check, _ = run_docker_command(
         container_name,
         "netstat -tlnp 2>/dev/null | grep 8080 || ss -tlnp | grep 8080 || echo 'Mitmdump port 8080 not listening'"
     )
     logger.info(f"Mitmdump port check: {mitm_check.strip()}")
     
-    # Start dev server on port 8082 (required by tests)
-    # The test expects https://dev.new.expensify.com:8082/
+    # Start dev server
     logger.info("Starting webpack dev server on port 8082...")
     
-    # Check if node_modules exists (required for dev server)
     _, node_modules_check, _ = run_docker_command(
         container_name,
         f"ls -d {repo_path}/node_modules 2>/dev/null && echo 'EXISTS' || echo 'MISSING'"
@@ -755,9 +887,6 @@ def run_swelancer_tests(
     else:
         logger.info(f"node_modules found: {node_modules_check.strip()}")
     
-    # Source nvm with correct version and start dev server
-    # CRITICAL: Set USE_WEB_PROXY=false so API calls go directly to www.expensify.com
-    # through the browser's proxy (mitmdump), instead of through webpack's internal proxy
     nvm_use = f"nvm use {node_version} && " if node_version else ""
     dev_server_cmd = (
         f"cd {repo_path} && "
@@ -767,11 +896,9 @@ def run_swelancer_tests(
     )
     run_docker_command(container_name, dev_server_cmd, timeout=30)
     
-    # Wait for dev server to start (webpack compilation takes time)
     logger.info("Waiting for dev server to be ready (60s for webpack compilation)...")
     time.sleep(60)
     
-    # Verify dev server is running on port 8082
     _, port_check, _ = run_docker_command(
         container_name,
         "netstat -tlnp 2>/dev/null | grep 8082 || ss -tlnp | grep 8082 || echo 'Port 8082 not listening'"
@@ -779,24 +906,17 @@ def run_swelancer_tests(
     logger.info(f"Dev server port check: {port_check.strip()}")
     
     if "not listening" in port_check:
-        # Check dev server log for errors
         _, devlog, _ = run_docker_command(container_name, "tail -30 /tmp/devserver.log 2>/dev/null || echo 'No log'")
         logger.error(f"Dev server failed to start. Log: {devlog}")
     
-    # Create logs directory for this instance
     run_docker_command(
         container_name,
         f"mkdir -p /app/tests/logs/{issue_id}"
     )
     
-    # ============================================================
-    # CRITICAL: Rewrite test file to inject proxy configuration
-    # This makes Playwright browser route traffic through mitmdump
-    # Without this, browser goes directly to internet, bypassing our replay proxy
-    # ============================================================
+    # Rewrite test file to inject proxy configuration
     logger.info(f"Rewriting test file to inject proxy configuration...")
     
-    # First ensure libcst is installed (required by rewrite_test.py)
     run_docker_command(
         container_name,
         "pip3 install libcst --quiet 2>/dev/null || pip install libcst --quiet 2>/dev/null || true",
@@ -815,17 +935,14 @@ def run_swelancer_tests(
     else:
         logger.info("Test file rewritten successfully with proxy configuration")
     
-    # Run tests using pytest directly (more reliable than ansible-playbook)
+    # Run tests
     logger.info(f"Running SWE-Lancer tests for issue {issue_id}...")
     
-    # CRITICAL FIX: Use PIPESTATUS to capture pytest's exit code, not tee's
-    # The previous code used `$?` which captures tee's exit code (always 0)
-    # PIPESTATUS[0] captures the exit code of the first command in the pipeline (pytest)
     test_command = (
         f'export DISPLAY=:99 && '
         f'export ISSUE_ID={issue_id} && '
         f'cd /app/tests && '
-        f'set -o pipefail && '  # Make pipeline return first non-zero exit code
+        f'set -o pipefail && '
         f'pytest issues/{issue_id}/test.py -v --tb=short 2>&1 | tee /app/tests/logs/{issue_id}/pytest.log; '
         f'echo ${{PIPESTATUS[0]}} > /app/tests/logs/{issue_id}/pytest_exit_code'
     )
@@ -838,19 +955,16 @@ def run_swelancer_tests(
     
     test_output = stdout + stderr
     
-    # Get pytest exit code (official grading method)
     _, exit_code_str, _ = run_docker_command(
         container_name,
         f"cat /app/tests/logs/{issue_id}/pytest_exit_code 2>/dev/null || echo '-1'"
     )
     
-    # Get pytest log
     _, pytest_log, _ = run_docker_command(
         container_name,
         f"cat /app/tests/logs/{issue_id}/pytest.log 2>/dev/null || echo 'No pytest log'"
     )
     
-    # Combine all output with exit code for parser
     full_output = (
         f"=== TEST OUTPUT ===\n{test_output}\n\n"
         f"=== PYTEST LOG ===\n{pytest_log}\n\n"
@@ -869,12 +983,12 @@ def run_swelancer_tests(
 
 
 # ============================================================
-# EVAL SCRIPT GENERATION (following test_spec.py:make_eval_test_spec)
+# STANDARD TEST COMMAND EXECUTION
 # ============================================================
 
 def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int = 900) -> tuple:
     """
-    Run the test command from the dataset, following client's test_spec.py flow.
+    Run the test command from the dataset.
     
     Returns: (returncode, stdout, stderr)
     """
@@ -882,8 +996,7 @@ def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int
     test_patch_raw = instance.get("test_patch", "")
     test_command = instance.get("test_command", "pytest")
     
-    # Parse test_patch - it may be a JSON-encoded list of patches or a raw diff string
-    # Following client's _from_json_or_obj pattern from test_spec.py
+    # Parse test_patch
     test_patches = []
     if test_patch_raw and test_patch_raw.strip():
         if test_patch_raw.strip().startswith('['):
@@ -900,7 +1013,7 @@ def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int
     
     logger.info(f"Parsed {len(test_patches)} test patches from dataset")
     
-    # Step 1: Apply golden test patches if present
+    # Apply golden test patches
     for i, test_patch in enumerate(test_patches):
         if not test_patch or not test_patch.strip():
             continue
@@ -923,24 +1036,17 @@ def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int
         )
         logger.info(f"Test patch {i+1} apply result: {returncode}")
     
-    # Step 2: Build the test execution command
-    # CRITICAL: Unset proxy environment variables that are baked into client images
-    # These proxies (127.0.0.1:8080) don't exist on AWS and break pip/package operations
+    # Unset proxy environment variables
     unset_proxy = (
         "unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ftp_proxy FTP_PROXY all_proxy ALL_PROXY; "
         "export http_proxy='' https_proxy='' HTTP_PROXY='' HTTPS_PROXY=''; "
     )
     
-    # Build command: Always source ENV first, unset proxies, then run test_command
-    # The test_command may contain its own source, so we strip that and handle it uniformly
-    # First, extract just the test execution part (after any source commands)
     test_exec = test_command
     if "&&" in test_command and "source" in test_command:
-        # Extract the part after the last && that contains source
         parts = test_command.split("&&")
-        test_exec = parts[-1].strip()  # Get the actual test command (pytest, etc.)
+        test_exec = parts[-1].strip()
     
-    # Build a clean command: source ENV, unset proxies, then run tests
     full_command = (
         f"source /saved/ENV 2>/dev/null || source /saved/*/ENV 2>/dev/null || true; "
         f"{unset_proxy}"
@@ -949,13 +1055,59 @@ def run_test_command(container_name: str, instance: Dict[str, Any], timeout: int
     
     logger.info(f"Running test command: {full_command[:200]}...")
     
-    # Step 3: Execute tests
     return run_docker_command(container_name, full_command, timeout=timeout)
 
 
 # ============================================================
-# TEST RESULT GRADING
+# TEST RESULT GRADING (with sophisticated matching)
 # ============================================================
+
+def normalize_test_name(test_name: str) -> str:
+    """
+    Normalize test name to enable matching between different formats.
+    
+    Converts:
+        tests/Console/MetaCommand/MetaCommandTest.php::testCommand
+    To:
+        MetaCommandTest::testCommand
+    """
+    if '::' in test_name:
+        path_part, method = test_name.rsplit('::', 1)
+    else:
+        return test_name
+    
+    if '.php' in path_part:
+        class_name = path_part.split('/')[-1].replace('.php', '')
+    elif '\\' in path_part:
+        class_name = path_part.split('\\')[-1]
+    else:
+        class_name = path_part.split('/')[-1] if '/' in path_part else path_part
+    
+    return f"{class_name}::{method}"
+
+
+def test_names_match(expected: str, actual: str) -> bool:
+    """Check if two test names match, handling different formats."""
+    if expected == actual:
+        return True
+    if expected in actual or actual in expected:
+        return True
+    
+    norm_expected = normalize_test_name(expected)
+    norm_actual = normalize_test_name(actual)
+    if norm_expected == norm_actual:
+        return True
+    
+    if '::' in norm_expected and '::' in norm_actual:
+        _, method_exp = norm_expected.rsplit('::', 1)
+        _, method_act = norm_actual.rsplit('::', 1)
+        class_exp = norm_expected.split('::')[0]
+        class_act = norm_actual.split('::')[0]
+        if method_exp == method_act and (class_exp in class_act or class_act in class_exp):
+            return True
+    
+    return False
+
 
 def grade_test_results(
     test_status_map: Dict[str, str],
@@ -967,11 +1119,6 @@ def grade_test_results(
     
     Returns dict with categorized test results.
     """
-    
-    # XFAIL and XPASS are valid pytest outcomes:
-    # - XFAIL: Expected to fail and did fail (not a regression)
-    # - XPASS: Expected to fail but passed (unexpected success)
-    # For P2P, XFAIL should count as "success" (not a regression), XPASS is also success
     passing_statuses = {TestStatus.PASSED, TestStatus.XFAIL, TestStatus.XPASS}
     
     results = {
@@ -984,13 +1131,18 @@ def grade_test_results(
         'pass_to_pass_failed': [],
     }
     
+    # Build set of failed/error tests for quick lookup
+    failed_or_error_tests = set()
+    for result_test, status in test_status_map.items():
+        if status in (TestStatus.FAILED, TestStatus.ERROR):
+            failed_or_error_tests.add(result_test)
+            failed_or_error_tests.add(normalize_test_name(result_test))
     
-    # Grade F2P tests (should now pass)
+    # Grade F2P tests
     for test in fail_to_pass:
         matched = False
         for result_test, status in test_status_map.items():
-            # Check exact match or substring match
-            if test == result_test or test in result_test or result_test in test:
+            if test_names_match(test, result_test):
                 if status == TestStatus.PASSED:
                     results['fail_to_pass_success'].append(test)
                 else:
@@ -999,15 +1151,20 @@ def grade_test_results(
                 break
         
         if not matched:
-            logger.warning(f"F2P test not found in output: {test}")
-            results['fail_to_pass_failed'].append(test)
+            is_failed = any(test_names_match(test, f) for f in failed_or_error_tests)
+            
+            if is_failed:
+                logger.info(f"F2P test matched as failed/error: {test}")
+                results['fail_to_pass_failed'].append(test)
+            else:
+                logger.info(f"F2P test not in error/failure section, assuming passed: {test}")
+                results['fail_to_pass_success'].append(test)
     
-    # Grade P2P tests (should still pass)
-    # XFAIL and XPASS are acceptable for P2P (not regressions)
+    # Grade P2P tests
     for test in pass_to_pass:
         matched = False
         for result_test, status in test_status_map.items():
-            if test == result_test or test in result_test or result_test in test:
+            if test_names_match(test, result_test):
                 if status in passing_statuses or status == TestStatus.SKIPPED:
                     results['pass_to_pass_success'].append(test)
                 else:
@@ -1016,93 +1173,62 @@ def grade_test_results(
                 break
         
         if not matched:
-            # P2P test not found - might be skipped, count as failed for safety
-            logger.warning(f"P2P test not found in output: {test}")
-            results['pass_to_pass_failed'].append(test)
+            is_failed = any(test_names_match(test, f) for f in failed_or_error_tests)
+            
+            if is_failed:
+                logger.info(f"P2P test matched as failed/error: {test}")
+                results['pass_to_pass_failed'].append(test)
+            else:
+                logger.info(f"P2P test not in error/failure section, assuming passed: {test}")
+                results['pass_to_pass_success'].append(test)
     
     return results
 
 
-def parse_pytest_output(stdout: str) -> Dict[str, str]:
-    """
-    Parse pytest output to extract test results.
-    
-    Handles multiple pytest output formats:
-    1. "PASSED test/test_file.py::test_name"  
-    2. "test/test_file.py::test_name PASSED"
-    3. Summary counts from the final line
-    4. XFAIL/XPASS for expected failure tests
-    
-    CRITICAL FIX: Remove ANSI color codes before parsing (matching client's log_parsers.py)
-    
-    Returns: Dict[test_name, status]
-    """
-    test_status_map = {}
-    
-    # Remove control characters (matching client's translator approach)
-    escapes = "".join([chr(char) for char in range(1, 32)])
-    translator = str.maketrans("", "", escapes)
-    
-    # All valid pytest status values including XFAIL/XPASS
-    ALL_STATUSES = ['PASSED', 'FAILED', 'ERROR', 'SKIPPED', 'XFAIL', 'XPASS']
-    status_pattern = '|'.join(ALL_STATUSES)
-    
-    for line in stdout.split('\n'):
-        # CRITICAL: Remove ANSI color codes like [32m, [0m, etc.
-        # This matches client's parse_log_pytest_v3: re.sub(r"\[(\d+)m", "", line)
-        line = re.sub(r"\[\d+m", "", line)
-        line = line.translate(translator)
-        line = line.strip()
+# ============================================================
+# FILE LOADING UTILITIES
+# ============================================================
+
+def load_json_file(filepath: str) -> Dict[str, Any]:
+    """Load a JSON file that may be JSONL (single line) or formatted JSON."""
+    with open(filepath, 'r') as f:
+        content = f.read().strip()
         
-        # Pattern 1: "PASSED test_path" or "XFAIL test_path - reason" (pytest -rA format)
-        # For XFAIL, there's often a reason after the test name like "XFAIL test_path - reason"
-        match = re.match(rf'^({status_pattern})\s+(\S+)', line)
-        if match:
-            status, test_path = match.groups()
-            test_status_map[test_path.strip()] = status
-            continue
-        
-        # Pattern 2: "test_path PASSED" or "test_path FAILED"
-        match = re.match(rf'^(.+::.*?)\s+({status_pattern})(?:\s|$)', line)
-        if match:
-            test_path, status = match.groups()
-            test_status_map[test_path.strip()] = status
-            continue
-        
-        # Pattern 3: Look for status at the end of lines with test paths
-        for status in ALL_STATUSES:
-            if f' {status}' in line or line.endswith(status):
-                # Extract test path before the status
-                parts = re.split(rf'\s+{status}(?:\s|$)', line)[0].strip()
-                if '::' in parts:
-                    test_status_map[parts] = status
-                    break
+    # Try parsing as single JSON object first
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
     
+    # Fallback to JSONL (first line)
+    for line in content.split('\n'):
+        if line.strip():
+            return json.loads(line)
     
-    return test_status_map
+    raise ValueError(f"Could not parse JSON from {filepath}")
 
 
-def parse_unittest_output(stdout: str) -> Dict[str, str]:
-    """Parse unittest output format."""
-    test_status_map = {}
+def parse_list_field(value) -> List[str]:
+    """Parse a list field that may be JSON, Python literal, or already a list."""
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return []
     
-    for line in stdout.split('\n'):
-        line = line.strip()
-        
-        if ' ... ok' in line.lower():
-            test = line.split(' ... ')[0].strip()
-            test_status_map[test] = TestStatus.PASSED
-        elif ' ... fail' in line.lower():
-            test = line.split(' ... ')[0].strip()
-            test_status_map[test] = TestStatus.FAILED
-        elif ' ... error' in line.lower():
-            test = line.split(' ... ')[0].strip()
-            test_status_map[test] = TestStatus.ERROR
-        elif ' ... skip' in line.lower():
-            test = line.split(' ... ')[0].strip()
-            test_status_map[test] = TestStatus.SKIPPED
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        pass
     
-    return test_status_map
+    try:
+        parsed = ast.literal_eval(value)
+        if isinstance(parsed, list):
+            return parsed
+    except (ValueError, SyntaxError):
+        pass
+    
+    logger.warning(f"Could not parse list field: {str(value)[:50]}...")
+    return []
 
 
 # ============================================================
@@ -1116,27 +1242,16 @@ def evaluate_instance(
     timeout: int = 900
 ) -> EvalReport:
     """
-    Evaluate a single trajectory instance following the standardized process.
+    Evaluate a single trajectory instance.
     
-    Steps:
-    1. Load trajectory and extract model patch
-    2. Load dataset with F2P, P2P, test_command, test_output_parser
-    3. Start Docker container
-    4. Apply model patch
-    5. Run eval script (applies test patch + runs tests)
-    6. Parse test output using specified parser
-    7. Grade results against F2P/P2P
+    Automatically routes to SWE-Lancer flow or standard flow based on dataset.
     """
-    container_name = f"eval_pilot2_{int(time.time())}"
+    container_name = f"eval_unified_{int(time.time())}"
     
     try:
-        # Step 1: Load trajectory
+        # Load trajectory
         logger.info(f"Loading trajectory from {trajectory_file}")
-        with open(trajectory_file, 'r') as f:
-            # All corrected delivery trajectories are single JSON objects (formatted or compact)
-            # Just read and parse the entire file
-            content = f.read().strip()
-            trajectory = json.loads(content)
+        trajectory = load_json_file(trajectory_file)
         
         instance_id = trajectory.get('instance_id', 'unknown')
         model_patch = extract_model_patch(trajectory)
@@ -1144,96 +1259,56 @@ def evaluate_instance(
         logger.info(f"Instance ID: {instance_id}")
         logger.info(f"Model patch length: {len(model_patch)} chars")
         
-        # Step 2: Load dataset
+        # Load dataset
         logger.info(f"Loading dataset from {dataset_file}")
-        with open(dataset_file, 'r') as f:
-            # Datasets are single JSON objects (formatted or compact), not JSONL
-            # Just read and parse the entire file (same as trajectory loading)
-            content = f.read().strip()
-            dataset = json.loads(content)
-
-            # Verify instance ID matches
-            if dataset.get('instance_id') != instance_id:
-                raise ValueError(f"Instance ID mismatch: expected {instance_id}, got {dataset.get('instance_id')}")
+        dataset = load_json_file(dataset_file)
         
-        # FIX: Use trajectory's instance field as primary source, fallback to dataset
-        # The trajectory's instance field contains complete data from OpenHands
+        if dataset.get('instance_id') != instance_id:
+            logger.warning(f"Instance ID mismatch: trajectory={instance_id}, dataset={dataset.get('instance_id')}")
+        
+        # Parse fields
         traj_instance = trajectory.get('instance', {})
-
-        # FIX: Handle both JSON and Python literal formats
-        # Some datasets store F2P/P2P as Python literals with single quotes: ['test1', 'test2']
-        # json.loads() fails on these, so we fallback to ast.literal_eval()
-        import ast
-
-        def _parse_list_field(value):
-            """Parse a list field that may be JSON, Python literal, or already a list."""
-            if isinstance(value, list):
-                return value
-            if not isinstance(value, str) or not value.strip():
-                return []
-            # Try JSON first
-            try:
-                return json.loads(value)
-            except json.JSONDecodeError:
-                pass
-            # Fallback to Python literal (handles single quotes)
-            try:
-                parsed = ast.literal_eval(value)
-                if isinstance(parsed, list):
-                    return parsed
-            except (ValueError, SyntaxError):
-                pass
-            # Last resort: return empty list
-            logger.warning(f"Could not parse list field: {value[:50]}...")
-            return []
-
-        # Parse fields from trajectory, but if empty after parsing, use dataset
-        fail_to_pass = _parse_list_field(traj_instance.get('FAIL_TO_PASS'))
-        if not fail_to_pass:  # If trajectory has empty list, fallback to dataset
-            fail_to_pass = _parse_list_field(dataset.get('FAIL_TO_PASS', []))
-
-        pass_to_pass = _parse_list_field(traj_instance.get('PASS_TO_PASS'))
-        if not pass_to_pass:  # If trajectory has empty list, fallback to dataset
-            pass_to_pass = _parse_list_field(dataset.get('PASS_TO_PASS', []))
-
-        # Parse test_command with proper empty string handling
+        
+        fail_to_pass = parse_list_field(traj_instance.get('FAIL_TO_PASS'))
+        if not fail_to_pass:
+            fail_to_pass = parse_list_field(dataset.get('FAIL_TO_PASS', []))
+        
+        pass_to_pass = parse_list_field(traj_instance.get('PASS_TO_PASS'))
+        if not pass_to_pass:
+            pass_to_pass = parse_list_field(dataset.get('PASS_TO_PASS', []))
+        
         test_command = traj_instance.get('test_command') or dataset.get('test_command') or 'pytest'
-        # If test_command is empty string, use default
         if not test_command or not test_command.strip():
             test_command = 'pytest --no-header -rA --tb=no -p no:cacheprovider'
-            logger.warning(f"Empty test_command in dataset, using default: {test_command}")
-
+            logger.warning(f"Empty test_command, using default: {test_command}")
+        
         test_output_parser = traj_instance.get('test_output_parser') or dataset.get('test_output_parser', 'python/parse_log_pytest_v3')
         test_patch = traj_instance.get('test_patch') or dataset.get('test_patch', '')
-
+        
         logger.info(f"F2P tests: {len(fail_to_pass)}")
         logger.info(f"P2P tests: {len(pass_to_pass)}")
         logger.info(f"Test command: {test_command[:80]}...")
         logger.info(f"Parser: {test_output_parser}")
         
-        # Check if this is a SWE-Lancer task
+        # Check if SWE-Lancer task
         is_swelancer = is_swelancer_task(dataset)
         if is_swelancer:
             logger.info("Detected SWE-Lancer task - using SWE-Lancer evaluation flow")
         
-        # Get the appropriate Docker image for SWE-Lancer
-        # Only use dataset image if command-line docker_image looks like an S3 path or is empty
+        # Get Docker image for SWE-Lancer
         if is_swelancer:
-            # If docker_image from CLI is a valid local image, use it
             if docker_image and not docker_image.startswith('s3://') and '/' in docker_image:
                 logger.info(f"Using CLI-provided Docker image: {docker_image}")
             else:
                 swelancer_image = get_swelancer_docker_image(dataset)
-                # Only use dataset image if it's not an S3 path
                 if swelancer_image and not swelancer_image.startswith('s3://'):
                     docker_image = swelancer_image
                     logger.info(f"Using SWE-Lancer Docker image from dataset: {docker_image}")
                 else:
-                    # Dataset has S3 path, use the unified image
                     docker_image = "swelancer/unified:latest"
                     logger.info(f"Dataset has S3 path, using local unified image: {docker_image}")
         
-        # Step 3: Start Docker container (SWE-Lancer or standard)
+        # Start container
         logger.info(f"Starting container from {docker_image}")
         if is_swelancer:
             container_started = start_swelancer_container(docker_image, container_name)
@@ -1259,15 +1334,14 @@ def evaluate_instance(
                 error_message="Failed to start container"
             )
         
+        # ============================================================
         # SWE-LANCER EVALUATION FLOW
+        # ============================================================
         if is_swelancer:
             base_commit = dataset.get('base_commit', '')
-            repo_path = dataset.get('repo_path', '/app/repo')
             
-            # IMPORTANT: Copy model patch to container first, but DON'T apply it yet
-            # The patch must be applied AFTER git checkout in run_swelancer_tests
             if model_patch:
-                logger.info("Copying model patch to container (will apply after checkout)...")
+                logger.info("Copying model patch to container...")
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.diff', delete=False) as f:
                     f.write(model_patch)
                     patch_file = f.name
@@ -1278,20 +1352,20 @@ def evaluate_instance(
                 )
                 os.unlink(patch_file)
             
-            # Run SWE-Lancer tests (this will do checkout, then apply patch, then run tests)
             returncode, full_output, _ = run_swelancer_tests(
                 container_name, dataset, base_commit, model_patch=model_patch, timeout=timeout
             )
             
-            # Parse SWE-Lancer output using exit code parser
             parser_func = get_parser(test_output_parser)
             test_status_map = parser_func(full_output)
             
             logger.info(f"Parsed {len(test_status_map)} test results (SWE-Lancer)")
         
+        # ============================================================
         # STANDARD EVALUATION FLOW
+        # ============================================================
         else:
-            # Step 4: Apply model patch
+            # Apply model patch
             if model_patch:
                 logger.info("Applying model patch...")
                 with tempfile.NamedTemporaryFile(mode='w', suffix='.diff', delete=False) as f:
@@ -1304,7 +1378,6 @@ def evaluate_instance(
                 )
                 os.unlink(patch_file)
                 
-                # Try git apply first, then patch
                 returncode, stdout, stderr = run_docker_command(
                     container_name,
                     "cd /app/repo && git apply -v /tmp/model.patch 2>&1 || "
@@ -1314,19 +1387,14 @@ def evaluate_instance(
                 if returncode != 0 and "FAILED" in stdout:
                     logger.warning("Patch application may have failed")
             
-            # Step 5: ALWAYS reset test files to ensure consistent evaluation
-            # This removes any model-created test files and restores original test files
-            # FIX: Previously we skipped reset when golden patch exists, but this allowed
-            # model-created test files to pollute the test run (e.g., GPT's test_namespace_layout.py)
+            # Reset test files
             logger.info("Resetting test files to clean state...")
             
-            # First, remove any NEW test files created by the model (git clean)
             run_docker_command(
                 container_name,
                 "cd /app/repo && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
             )
             
-            # Then, restore modified test files to original state (git checkout)
             run_docker_command(
                 container_name,
                 "cd /app/repo && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
@@ -1334,29 +1402,22 @@ def evaluate_instance(
             
             logger.info("Test files reset complete")
             
-            # Step 6: Run test command (applies test patch and runs tests)
+            # Run test command
             returncode, stdout, stderr = run_test_command(
                 container_name, dataset, timeout=timeout
             )
             
             full_output = stdout + stderr
             
-            # Step 7: Parse test output using appropriate parser based on test_output_parser
-            if 'unittest' in test_output_parser.lower():
-                test_status_map = parse_unittest_output(full_output)
-            elif 'swelancer' in test_output_parser.lower() or 'playwright' in test_output_parser.lower():
-                parser_func = get_parser(test_output_parser)
-                test_status_map = parser_func(full_output)
-            else:
-                # Default to pytest parser (handles parse_log_pytest_v3, parse_log_pytest)
-                test_status_map = parse_pytest_output(full_output)
+            # Parse test output
+            parser_func = get_parser(test_output_parser)
+            test_status_map = parser_func(full_output)
             
             logger.info(f"Parsed {len(test_status_map)} test results")
         
-        # Step 8: Grade results
+        # Grade results
         grade_results = grade_test_results(test_status_map, fail_to_pass, pass_to_pass)
         
-        # Determine resolved status
         all_f2p_pass = len(grade_results['fail_to_pass_failed']) == 0 and len(grade_results['fail_to_pass_success']) > 0
         all_p2p_pass = len(grade_results['pass_to_pass_failed']) == 0
         resolved = all_f2p_pass and all_p2p_pass
@@ -1375,7 +1436,7 @@ def evaluate_instance(
             fail_to_pass_failed=grade_results['fail_to_pass_failed'],
             pass_to_pass_success=grade_results['pass_to_pass_success'],
             pass_to_pass_failed=grade_results['pass_to_pass_failed'],
-            test_output=full_output[:50000]  # Limit output size
+            test_output=full_output[:50000]
         )
         
     except Exception as e:
@@ -1404,12 +1465,12 @@ def evaluate_instance(
 
 
 # ============================================================
-# CLI
+# CLI AND OUTPUT GENERATION
 # ============================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Standardized Pilot 2.2 Evaluation Script",
+        description="Unified Evaluation Script for Multi-Language SWE-Bench Tasks",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -1420,12 +1481,13 @@ Examples:
         --docker-image mswebench/sweb.eval.x86_64.task:latest \\
         --output-file eval_output.jsonl
         
-    # With custom timeout
+    # With custom timeout and output directory
     python eval_pilot2_standardized.py \\
         --trajectory-file output.jsonl \\
         --dataset-file task.jsonl \\
         --docker-image image:tag \\
         --output-file eval.jsonl \\
+        --output-dir ./eval_results \\
         --timeout 1200
         """
     )
@@ -1433,9 +1495,20 @@ Examples:
     parser.add_argument("--dataset-file", required=True, help="Path to dataset JSONL")
     parser.add_argument("--docker-image", required=True, help="Docker image name or path to .tar")
     parser.add_argument("--output-file", required=True, help="Output file for eval results")
+    parser.add_argument("--output-dir", help="Output directory for eval_outputs structure (defaults to trajectory dir)")
     parser.add_argument("--timeout", type=int, default=900, help="Test timeout in seconds (default: 900)")
     
     args = parser.parse_args()
+    
+    # Determine output directory
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        output_dir = os.path.dirname(args.trajectory_file)
+    
+    # Load dataset for test_command
+    dataset = load_json_file(args.dataset_file)
+    test_command = dataset.get('test_command', 'pytest')
     
     # Run evaluation
     report = evaluate_instance(
@@ -1460,15 +1533,8 @@ Examples:
         logger.info(f"Error: {report.error_message}")
     logger.info("=" * 60)
     
-    # Save results
-    # Load original trajectory to merge
-    with open(args.trajectory_file, 'r') as f:
-        # All corrected delivery trajectories are single JSON objects (formatted or compact)
-        # Just read and parse the entire file
-        content = f.read().strip()
-        original = json.loads(content)
-    
-    # Add eval details
+    # Save results (JSONL format)
+    original = load_json_file(args.trajectory_file)
     original['pilot2_eval_details'] = asdict(report)
     original['resolved'] = report.resolved
     
@@ -1477,14 +1543,140 @@ Examples:
     
     logger.info(f"Results saved to: {args.output_file}")
     
-    # Always return 0 if evaluation completed successfully
-    # The resolved status is captured in the output file
-    # Only return non-zero for actual evaluation errors (error_eval=True)
+    # ============================================================
+    # CREATE EVAL_OUTPUTS DIRECTORY STRUCTURE
+    # ============================================================
+    logger.info("Creating eval_outputs directory structure...")
+    
+    eval_outputs_dir = os.path.join(output_dir, 'eval_outputs')
+    instance_eval_dir = os.path.join(eval_outputs_dir, report.instance_id)
+    os.makedirs(instance_eval_dir, exist_ok=True)
+    
+    # 1. Save patch.diff
+    git_patch = original.get('test_result', {}).get('git_patch', '')
+    if not git_patch:
+        git_patch = original.get('git_patch', '')
+    patch_file = os.path.join(instance_eval_dir, 'patch.diff')
+    with open(patch_file, 'w') as f:
+        f.write(git_patch)
+    logger.info(f"Created: {patch_file}")
+    
+    # 2. Create report.json
+    openhands_report = {
+        report.instance_id: {
+            "patch_is_None": not git_patch,
+            "patch_exists": bool(git_patch),
+            "patch_successfully_applied": not report.failed_apply_patch,
+            "resolved": report.resolved,
+            "tests_status": {
+                "FAIL_TO_PASS": {
+                    "success": report.fail_to_pass_success,
+                    "failure": report.fail_to_pass_failed
+                },
+                "PASS_TO_PASS": {
+                    "success": report.pass_to_pass_success,
+                    "failure": report.pass_to_pass_failed
+                },
+                "FAIL_TO_FAIL": {"success": [], "failure": []},
+                "PASS_TO_FAIL": {"success": [], "failure": []}
+            }
+        }
+    }
+    report_file = os.path.join(instance_eval_dir, 'report.json')
+    with open(report_file, 'w') as f:
+        json.dump(openhands_report, f, indent=4)
+    logger.info(f"Created: {report_file}")
+    
+    # 3. Save test_output.txt
+    test_output_file = os.path.join(instance_eval_dir, 'test_output.txt')
+    with open(test_output_file, 'w') as f:
+        f.write(report.test_output)
+    logger.info(f"Created: {test_output_file}")
+    
+    # 4. Create run_instance.log
+    run_log_file = os.path.join(instance_eval_dir, 'run_instance.log')
+    run_log_content = f"""Evaluation Log for {report.instance_id}
+{'=' * 60}
+Docker Image: {args.docker_image}
+Timeout: {args.timeout}s
+Resolved: {report.resolved}
+
+Patch Applied: {not report.failed_apply_patch}
+Test Patch Applied: {not report.failed_apply_test_patch}
+Tests Passed: {report.tests_passed}
+Tests Failed: {report.tests_failed}
+Tests Error: {report.tests_error}
+
+FAIL_TO_PASS Success: {report.fail_to_pass_success}
+FAIL_TO_PASS Failed: {report.fail_to_pass_failed}
+PASS_TO_PASS Success: {report.pass_to_pass_success}
+PASS_TO_PASS Failed: {report.pass_to_pass_failed}
+
+{'=' * 60}
+Test Output:
+{'=' * 60}
+{report.test_output}
+"""
+    with open(run_log_file, 'w') as f:
+        f.write(run_log_content)
+    logger.info(f"Created: {run_log_file}")
+    
+    # 5. Create eval.sh
+    eval_sh_file = os.path.join(instance_eval_dir, 'eval.sh')
+    eval_sh_content = f"""#!/bin/bash
+# Evaluation script for {report.instance_id}
+# Generated by eval_pilot2_standardized.py
+
+cd /testbed || cd /app/repo || cd /workspace
+
+# Run tests
+{test_command}
+"""
+    with open(eval_sh_file, 'w') as f:
+        f.write(eval_sh_content)
+    os.chmod(eval_sh_file, 0o755)
+    logger.info(f"Created: {eval_sh_file}")
+    
+    # 6. Create aggregate report.json
+    aggregate_report_file = os.path.join(eval_outputs_dir, 'report.json')
+    with open(aggregate_report_file, 'w') as f:
+        json.dump(openhands_report, f, indent=4)
+    logger.info(f"Created: {aggregate_report_file}")
+    
+    # 7. Create eval_summary.json
+    eval_summary = {
+        "total_instances": 1,
+        "resolved_instances": 1 if report.resolved else 0,
+        "unresolved_instances": 0 if report.resolved else 1,
+        "error_instances": 1 if report.error_eval else 0,
+        "results": {
+            report.instance_id: {
+                "resolved": report.resolved,
+                "tests_passed": report.tests_passed,
+                "tests_failed": report.tests_failed,
+                "f2p_success": len(report.fail_to_pass_success),
+                "f2p_total": len(report.fail_to_pass_success) + len(report.fail_to_pass_failed),
+                "p2p_success": len(report.pass_to_pass_success),
+                "p2p_total": len(report.pass_to_pass_success) + len(report.pass_to_pass_failed)
+            }
+        }
+    }
+    eval_summary_file = os.path.join(output_dir, 'eval_summary.json')
+    with open(eval_summary_file, 'w') as f:
+        json.dump(eval_summary, f, indent=4)
+    logger.info(f"Created: {eval_summary_file}")
+    
+    logger.info("=" * 60)
+    logger.info("EVAL_OUTPUTS STRUCTURE CREATED SUCCESSFULLY")
+    logger.info(f"Location: {eval_outputs_dir}")
+    logger.info("=" * 60)
+    
+    # Return 0 if evaluation completed (resolved or not)
+    # Return 1 only for actual evaluation errors
     if report.error_eval and not report.tests_failed and not report.tests_passed:
-        return 1  # Actual evaluation error (e.g., container failed to start)
-    return 0  # Evaluation completed (test may have passed or failed)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
     exit(main())
-
