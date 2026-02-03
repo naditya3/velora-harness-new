@@ -416,6 +416,23 @@ def parse_log_playwright(log: str, grading_spec: Any = None) -> Dict[str, str]:
     return parse_log_swelancer_exitcode(log, grading_spec)
 
 
+def parse_log_cargo_test(log: str, grading_spec: Any = None) -> Dict[str, str]:
+    """Parser for Rust cargo test output."""
+    results: Dict[str, TestStatus] = {}
+    test_pattern = re.compile(
+        r"^test\s+([^\s]+)\s+\.\.\.\s+(ok|FAILED|ignored)", re.MULTILINE
+    )
+    for match in test_pattern.finditer(log):
+        test_name = match.group(1)
+        status = match.group(2)
+        if status == "ok":
+            results[test_name] = TestStatus.PASSED
+        elif status == "FAILED":
+            results[test_name] = TestStatus.FAILED
+        # ignored tests are skipped
+    return {test_name: test_status.value for test_name, test_status in results.items()}
+
+
 # ============================================================
 # UNIFIED PARSER REGISTRY
 # ============================================================
@@ -437,6 +454,9 @@ PARSER_REGISTRY: Dict[str, Callable] = {
     "javascript/parse_log_playwright": parse_log_playwright,
     "swelancer/parse_log_playwright": parse_log_playwright,
     "swelancer/parse_log_exitcode": parse_log_swelancer_exitcode,
+
+    # Rust parsers
+    "rust/parse_log_cargo_test": parse_log_cargo_test,
 }
 
 

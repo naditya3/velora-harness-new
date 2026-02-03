@@ -283,7 +283,7 @@ echo "TAGGING DOCKER IMAGE FOR OPENHANDS"
 echo "============================================"
 
 # Double tagging as per OpenHands requirements
-REPO_M=$(echo "$REPO" | sed 's|/|_m_|g')
+REPO_M=$(echo "$REPO" | sed 's|/|_m_|g' | tr '[:upper:]' '[:lower:]')
 # TAG1 already defined above: mswebench/sweb.eval.x86_64.${INSTANCE_ID}:latest
 TAG2="mswebench/${REPO_M}:pr-${INSTANCE_ID}"
 
