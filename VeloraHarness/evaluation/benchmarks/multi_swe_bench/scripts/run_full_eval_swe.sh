@@ -139,26 +139,10 @@ case "$MODEL_CONFIG" in
   *) MODEL_DISPLAY_NAME="${MODEL_CONFIG#llm.}" ;;
 esac
 
-# Get run number from environment or default to 1
-RUN_NUMBER=${RUN_NUMBER:-1}
-
-# Construct new output directory path
+# Output base path (run-specific paths set inside N_RUNS loop)
 NEW_OUTPUT_BASE="evaluation/evaluation_outputs/Trajectory_results"
-NEW_OUTPUT_DIR="${NEW_OUTPUT_BASE}/${BENCHMARK_TYPE}/${INSTANCE_ID}/${MODEL_DISPLAY_NAME}/Run${RUN_NUMBER}"
 
-echo ""
-echo "Output Structure:"
-echo "  Benchmark Type: $BENCHMARK_TYPE"
-echo "  Model: $MODEL_DISPLAY_NAME"
-echo "  Run Number: $RUN_NUMBER"
-echo "  Output Directory: $NEW_OUTPUT_DIR"
-echo ""
-
-# Create output directory
-mkdir -p "$NEW_OUTPUT_DIR"
-
-# Export for use in trajectory generation
-export EVAL_OUTPUT_DIR="$(pwd)/$NEW_OUTPUT_DIR"
+# Export INSTANCE_ID for use throughout
 export INSTANCE_ID
 
 # Extract image info
@@ -568,20 +552,134 @@ PYEOF
 echo "Modified dataset: $MODIFIED_DATASET"
 
 # ============================================
-# PHASE 1: TRAJECTORY GENERATION
+# PHASE 1 & 2: TRAJECTORY GENERATION + EVALUATION
 # ============================================
 echo ""
 echo "============================================"
-echo "PHASE 1: TRAJECTORY GENERATION"
+echo "TRAJECTORY GENERATION AND EVALUATION"
 echo "============================================"
 
 unset SANDBOX_ENV_GITHUB_TOKEN  # Prevent agent from using github token
+
+# Helper function to run evaluation for a single run
+run_evaluation_for_run() {
+  local run_output_dir="$1"
+  local run_number="$2"
+
+  # ============================================
+  # LOCATE OUTPUT FILE FOR THIS RUN
+  # ============================================
+  echo ""
+  echo "============================================"
+  echo "LOCATING TRAJECTORY OUTPUT (Run $run_number)"
+  echo "============================================"
+
+  OUTPUT_DIR="$run_output_dir"
+  OUTPUT_FILE="${OUTPUT_DIR}/output.jsonl"
+
+  echo "Output directory: $OUTPUT_DIR"
+  echo "Expected output file: $OUTPUT_FILE"
+
+  if [ ! -f "$OUTPUT_FILE" ]; then
+    echo "WARNING: Output file not found at expected path: $OUTPUT_FILE"
+    echo "Searching for output.jsonl..."
+    FOUND_FILE=$(find "$run_output_dir" -type f -name "output.jsonl" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+
+    if [ -n "$FOUND_FILE" ]; then
+      OUTPUT_FILE="$FOUND_FILE"
+      OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
+      echo "Found output file at: $OUTPUT_FILE"
+    else
+      echo "ERROR: Could not find output.jsonl for run $run_number"
+      return 1
+    fi
+  fi
+
+  # ============================================
+  # CHECK FOR NON-EMPTY PATCHES
+  # ============================================
+  PATCH_SIZE=$(python3 -c "
+import json
+with open('$OUTPUT_FILE', 'r') as f:
+    lines = f.readlines()
+    if lines:
+        d = json.loads(lines[-1])
+        patch = d.get('test_result', {}).get('git_patch', '')
+        print(len(patch))
+    else:
+        print(0)
+" 2>/dev/null || echo "0")
+
+  echo "Git patch size: $PATCH_SIZE bytes"
+
+  if [ "$PATCH_SIZE" -lt 100 ]; then
+    echo "WARNING: No valid patch found in run $run_number. Skipping evaluation."
+    return 1
+  fi
+
+  # ============================================
+  # PHASE 2: DETAILED PATCH EVALUATION (Run $run_number)
+  # ============================================
+  echo ""
+  echo "============================================"
+  echo "EVALUATING RUN $run_number"
+  echo "============================================"
+
+  SCRIPT_DIR=$(dirname "$0")
+  EVAL_SCRIPT="$SCRIPT_DIR/eval_pilot2_standardized.py"
+  EVAL_OUTPUT_FILE="${OUTPUT_DIR}/eval_standardized_output.jsonl"
+
+  if [ ! -f "$EVAL_SCRIPT" ]; then
+    echo "ERROR: Evaluation script not found: $EVAL_SCRIPT"
+    return 1
+  fi
+
+  DOCKER_IMAGE="$TAG1"
+  echo "Docker image for evaluation: $DOCKER_IMAGE"
+
+  EVAL_COMMAND="python3 $EVAL_SCRIPT \
+    --trajectory-file $OUTPUT_FILE \
+    --dataset-file $DATASET_ABS \
+    --docker-image $DOCKER_IMAGE \
+    --output-file $EVAL_OUTPUT_FILE \
+    --output-dir $OUTPUT_DIR \
+    --timeout 600"
+
+  echo "Running: $EVAL_COMMAND"
+  echo ""
+  eval $EVAL_COMMAND
+
+  EVAL_EXIT=$?
+
+  if [ $EVAL_EXIT -ne 0 ]; then
+    echo "WARNING: Evaluation failed for run $run_number with exit code $EVAL_EXIT"
+    return 1
+  else
+    echo "✓ Run $run_number evaluation complete"
+  fi
+
+  return 0
+}
 
 # Support for batch evaluation: RUN_ID environment variable
 # If RUN_ID is set, use it for unique output paths (single run)
 # Otherwise, use N_RUNS loop for multiple runs
 if [ -n "$RUN_ID" ]; then
   # Single run with specific ID (used by batch worker)
+  RUN_NUMBER=${RUN_ID}
+  NEW_OUTPUT_DIR="${NEW_OUTPUT_BASE}/${BENCHMARK_TYPE}/${INSTANCE_ID}/${MODEL_DISPLAY_NAME}/Run${RUN_NUMBER}"
+
+  echo ""
+  echo "Output Structure:"
+  echo "  Benchmark Type: $BENCHMARK_TYPE"
+  echo "  Model: $MODEL_DISPLAY_NAME"
+  echo "  Run Number: $RUN_NUMBER"
+  echo "  Output Directory: $NEW_OUTPUT_DIR"
+  echo ""
+
+  mkdir -p "$NEW_OUTPUT_DIR"
+  export EVAL_OUTPUT_DIR="$(pwd)/$NEW_OUTPUT_DIR"
+
   current_eval_note="${EVAL_NOTE}-run_${RUN_ID}"
   echo ""
   echo "Starting run $RUN_ID with eval_note: $current_eval_note"
@@ -600,12 +698,35 @@ if [ -n "$RUN_ID" ]; then
 
   echo "Running: $INFER_COMMAND"
   echo ""
-  # Run poetry command (already in correct directory)
   eval $INFER_COMMAND
+
+  # Run evaluation for this single run
+  run_evaluation_for_run "$EVAL_OUTPUT_DIR" "$RUN_NUMBER"
 else
-  # Multiple runs (N_RUNS loop)
+  # Multiple runs (N_RUNS loop) - each run gets its own directory and evaluation
   N_RUNS=${N_RUNS:-1}
+
   for i in $(seq 1 $N_RUNS); do
+    echo ""
+    echo "============================================"
+    echo "RUN $i of $N_RUNS"
+    echo "============================================"
+
+    # Set run-specific output directory
+    RUN_NUMBER=$i
+    NEW_OUTPUT_DIR="${NEW_OUTPUT_BASE}/${BENCHMARK_TYPE}/${INSTANCE_ID}/${MODEL_DISPLAY_NAME}/Run${RUN_NUMBER}"
+
+    echo ""
+    echo "Output Structure:"
+    echo "  Benchmark Type: $BENCHMARK_TYPE"
+    echo "  Model: $MODEL_DISPLAY_NAME"
+    echo "  Run Number: $RUN_NUMBER"
+    echo "  Output Directory: $NEW_OUTPUT_DIR"
+    echo ""
+
+    mkdir -p "$NEW_OUTPUT_DIR"
+    export EVAL_OUTPUT_DIR="$(pwd)/$NEW_OUTPUT_DIR"
+
     current_eval_note="${EVAL_NOTE}-run_${i}"
     echo ""
     echo "Starting run $i with eval_note: $current_eval_note"
@@ -624,156 +745,14 @@ else
 
     echo "Running: $INFER_COMMAND"
     echo ""
-    # Run poetry command (already in correct directory)
     eval $INFER_COMMAND
+
+    # Run evaluation for this run
+    run_evaluation_for_run "$EVAL_OUTPUT_DIR" "$RUN_NUMBER"
+
+    echo ""
   done
 fi
-
-# ============================================
-# LOCATE OUTPUT FILE (using known output directory)
-# ============================================
-echo ""
-echo "============================================"
-echo "LOCATING TRAJECTORY OUTPUT"
-echo "============================================"
-
-# Use the known output directory from the new structure
-OUTPUT_DIR="$EVAL_OUTPUT_DIR"
-OUTPUT_FILE="${OUTPUT_DIR}/output.jsonl"
-
-echo "Output directory: $OUTPUT_DIR"
-echo "Expected output file: $OUTPUT_FILE"
-
-# Verify output file exists
-if [ ! -f "$OUTPUT_FILE" ]; then
-  echo "WARNING: Output file not found at expected path: $OUTPUT_FILE"
-  echo ""
-  echo "Searching for output.jsonl in current run directory..."
-
-  # Search within EVAL_OUTPUT_DIR (which is the Run directory) for this specific model's output
-  # The actual path from run_infer.py is: EVAL_OUTPUT_DIR/__tmp__*/{agent}/{model}_*/output.jsonl
-  # Sort by modification time (newest first) to get the most recent run
-  FOUND_FILE=$(find "$EVAL_OUTPUT_DIR" -type f -name "output.jsonl" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-
-  if [ -n "$FOUND_FILE" ]; then
-    OUTPUT_FILE="$FOUND_FILE"
-    OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
-    echo "Found output file at: $OUTPUT_FILE"
-  else
-    echo "ERROR: Could not find output.jsonl in $EVAL_OUTPUT_DIR"
-    echo "Searched directory tree:"
-    find "$EVAL_OUTPUT_DIR" -type f -name "output.jsonl" 2>/dev/null | head -10
-    exit 1
-  fi
-fi
-
-# Export OUTPUT_DIR for later use
-export OUTPUT_DIR
-
-# ============================================
-# VERIFY INSTANCE ID MATCHES
-# ============================================
-TRAJ_INSTANCE_ID=$(python3 -c "
-import json
-with open('$OUTPUT_FILE', 'r') as f:
-    lines = f.readlines()
-    if lines:
-        d = json.loads(lines[-1])  # Get last entry (final trajectory state)
-        print(d.get('instance_id', ''))
-" 2>/dev/null)
-
-if [ "$TRAJ_INSTANCE_ID" != "$INSTANCE_ID" ]; then
-  echo "WARNING: Instance ID mismatch!"
-  echo "  Dataset: $INSTANCE_ID"
-  echo "  Trajectory: $TRAJ_INSTANCE_ID"
-fi
-
-echo "Instance ID verified: $INSTANCE_ID"
-
-# ============================================
-# CHECK FOR NON-EMPTY PATCHES
-# ============================================
-PATCH_SIZE=$(python3 -c "
-import json
-with open('$OUTPUT_FILE', 'r') as f:
-    lines = f.readlines()
-    if lines:
-        d = json.loads(lines[-1])  # Get last entry (final trajectory state)
-        patch = d.get('test_result', {}).get('git_patch', '')
-        print(len(patch))
-    else:
-        print(0)
-" 2>/dev/null || echo "0")
-
-echo "Git patch size: $PATCH_SIZE bytes"
-
-if [ "$PATCH_SIZE" -lt 100 ]; then
-  echo "WARNING: No valid patch found in output. Skipping evaluation."
-  echo ""
-  echo "============================================"
-  echo "TRAJECTORY GENERATION COMPLETE (NO PATCH)"
-  echo "============================================"
-  echo "Output directory: $OUTPUT_DIR"
-  exit 0
-fi
-
-# ============================================
-# PHASE 2: DETAILED PATCH EVALUATION
-# ============================================
-echo ""
-echo "============================================"
-echo "PHASE 2: DETAILED PATCH EVALUATION"
-echo "Using eval_standardized_swe.py"
-echo "============================================"
-
-# Run the detailed evaluation script
-# Use eval_pilot2_standardized.py (unified version with all parsers)
-SCRIPT_DIR=$(dirname "$0")
-EVAL_SCRIPT="$SCRIPT_DIR/eval_pilot2_standardized.py"
-EVAL_OUTPUT_FILE="${OUTPUT_DIR}/eval_standardized_output.jsonl"
-
-# Verify eval script exists
-if [ ! -f "$EVAL_SCRIPT" ]; then
-  echo "ERROR: Evaluation script not found: $EVAL_SCRIPT"
-  echo "Expected location: evaluation/benchmarks/multi_swe_bench/scripts/eval_pilot2_standardized.py"
-  exit 1
-fi
-
-# Use the mswebench tagged image
-DOCKER_IMAGE="$TAG1"
-echo "Docker image for evaluation: $DOCKER_IMAGE"
-echo "Evaluation script: $EVAL_SCRIPT"
-
-# Run evaluation with --output-dir to create the full eval_outputs structure
-EVAL_COMMAND="python3 $EVAL_SCRIPT \
-  --trajectory-file $OUTPUT_FILE \
-  --dataset-file $DATASET_ABS \
-  --docker-image $DOCKER_IMAGE \
-  --output-file $EVAL_OUTPUT_FILE \
-  --output-dir $OUTPUT_DIR \
-  --timeout 600"
-
-echo "Running: $EVAL_COMMAND"
-echo ""
-eval $EVAL_COMMAND
-
-EVAL_EXIT=$?
-
-if [ $EVAL_EXIT -ne 0 ]; then
-  echo "ERROR: Evaluation failed with exit code $EVAL_EXIT"
-  exit $EVAL_EXIT
-fi
-
-# Note: eval_pilot2_standardized.py now creates the full eval_outputs structure:
-#   eval_outputs/
-#   ├── report.json
-#   └── <instance_id>/
-#       ├── patch.diff
-#       ├── report.json
-#       ├── test_output.txt
-#       ├── run_instance.log
-#       └── eval.sh
-#   eval_summary.json
 
 # ============================================
 # SUMMARY
@@ -783,48 +762,61 @@ echo "============================================"
 echo "FULL EVALUATION COMPLETE"
 echo "============================================"
 echo ""
-echo "Output directory: $OUTPUT_DIR"
+
+# Show all run directories
+RESULTS_BASE="${NEW_OUTPUT_BASE}/${BENCHMARK_TYPE}/${INSTANCE_ID}/${MODEL_DISPLAY_NAME}"
+echo "Results directory: $RESULTS_BASE"
 echo ""
-echo "Files generated:"
-ls -lh "$OUTPUT_DIR/" 2>/dev/null || true
-echo ""
 
-# Show eval_outputs structure
-EVAL_OUTPUTS_DIR="$OUTPUT_DIR/eval_outputs"
-if [ -d "$EVAL_OUTPUTS_DIR" ]; then
-  echo "=== Evaluation Outputs ==="
-  ls -lR "$EVAL_OUTPUTS_DIR/" 2>/dev/null | head -50
-  echo ""
+if [ -d "$RESULTS_BASE" ]; then
+  echo "=== Run Results ==="
+  for run_dir in "$RESULTS_BASE"/Run*/; do
+    if [ -d "$run_dir" ]; then
+      run_name=$(basename "$run_dir")
+      echo ""
+      echo "--- $run_name ---"
 
-  # Show individual instance report
-  for instance_dir in "$EVAL_OUTPUTS_DIR"/*/; do
-    if [ -d "$instance_dir" ]; then
-      instance_id=$(basename "$instance_dir")
-      echo "Instance: $instance_id"
-      echo "  Files: $(ls "$instance_dir" 2>/dev/null | tr '\n' ' ')"
-
-      if [ -f "${instance_dir}report.json" ]; then
-        echo ""
-        echo "  Report Details:"
-        cat "${instance_dir}report.json" | python3 -c "
+      # Check for eval_outputs
+      EVAL_OUTPUTS_DIR="$run_dir/eval_outputs"
+      if [ -d "$EVAL_OUTPUTS_DIR" ]; then
+        for instance_dir in "$EVAL_OUTPUTS_DIR"/*/; do
+          if [ -d "$instance_dir" ] && [ -f "${instance_dir}report.json" ]; then
+            cat "${instance_dir}report.json" | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
     for iid, details in d.items():
-        print(f'    Resolved: {details.get(\"resolved\", False)}')
-        print(f'    Patch Applied: {details.get(\"patch_successfully_applied\", False)}')
+        resolved = details.get('resolved', False)
+        status = '✓ RESOLVED' if resolved else '✗ NOT RESOLVED'
+        print(f'  {status}')
         ts = details.get('tests_status', {})
         f2p = ts.get('FAIL_TO_PASS', {})
         p2p = ts.get('PASS_TO_PASS', {})
-        print(f'    F2P Success: {len(f2p.get(\"success\", []))} / Failure: {len(f2p.get(\"failure\", []))}')
-        print(f'    P2P Success: {len(p2p.get(\"success\", []))} / Failure: {len(p2p.get(\"failure\", []))}')
+        print(f'  F2P: {len(f2p.get(\"success\", []))}/{len(f2p.get(\"success\", [])) + len(f2p.get(\"failure\", []))}')
+        print(f'  P2P: {len(p2p.get(\"success\", []))}/{len(p2p.get(\"success\", [])) + len(p2p.get(\"failure\", []))}')
 except Exception as e:
-    print(f'    Error parsing report: {e}')
-" 2>/dev/null || true
+    print(f'  Error: {e}')
+" 2>/dev/null || echo "  (no report)"
+          fi
+        done
+      else
+        echo "  (evaluation pending or failed)"
       fi
-      echo ""
     fi
   done
+
+  # Calculate pass@k
+  echo ""
+  echo "=== Pass@${N_RUNS:-1} Summary ==="
+  RESOLVED_COUNT=$(find "$RESULTS_BASE" -path "*/eval_outputs/*/report.json" -exec grep -l '"resolved": true' {} \; 2>/dev/null | wc -l)
+  TOTAL_RUNS=$(find "$RESULTS_BASE" -type d -name "Run*" 2>/dev/null | wc -l)
+  echo "Resolved: $RESOLVED_COUNT / $TOTAL_RUNS runs"
+
+  if [ "$RESOLVED_COUNT" -gt 0 ]; then
+    echo "Pass@${N_RUNS:-1}: YES (at least one run resolved)"
+  else
+    echo "Pass@${N_RUNS:-1}: NO (no runs resolved)"
+  fi
 fi
 
 echo ""
