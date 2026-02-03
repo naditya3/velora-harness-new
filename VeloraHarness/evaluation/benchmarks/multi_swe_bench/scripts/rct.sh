@@ -51,6 +51,37 @@ get_model_config() {
     esac
 }
 
+# Get display model name (for directory structure)
+get_model_display_name() {
+    local model="$1"
+    case "$model" in
+        gemini) echo "Gemini" ;;
+        claude) echo "Claude" ;;
+        gpt) echo "GPT" ;;
+        *) echo "$model" ;;
+    esac
+}
+
+# Detect benchmark type from dataset path or instance ID
+detect_benchmark_type() {
+    local dataset="$1"
+    local instance_id="$2"
+    
+    # Check dataset path patterns
+    if [[ "$dataset" == *"swelancer"* ]] || [[ "$dataset" == *"expensify"* ]] || [[ "$dataset" == *"Expensify"* ]]; then
+        echo "RCT"
+    elif [[ "$dataset" == *"swe_lite"* ]] || [[ "$dataset" == *"swe-bench-lite"* ]]; then
+        echo "Lite"
+    elif [[ "$dataset" == *"lst"* ]] || [[ "$dataset" == *"large_scale"* ]]; then
+        echo "LST"
+    # Check if instance_id looks like RCT (17-digit timestamp)
+    elif [[ "$instance_id" =~ ^[0-9]{16,}$ ]]; then
+        echo "RCT"
+    else
+        echo "SWE-hard"
+    fi
+}
+
 # =============================================================================
 # DEFAULT SETTINGS
 # =============================================================================
@@ -606,12 +637,26 @@ run_single_evaluation() {
         dataset_file="~/VeloraHarness/dataset/instances/${instance_id}.jsonl"
     fi
     
+    # Detect benchmark type for directory structure
+    local benchmark_type
+    benchmark_type=$(detect_benchmark_type "$dataset_file" "$instance_id")
+    
+    # Get display model name for directory
+    local model_display_name
+    model_display_name=$(get_model_display_name "$model")
+    
     eval_cmd="
 cd $velora_path && source .venv/bin/activate
 export USE_SWELANCER_MONOLITH=true
 export SWELANCER_MONOLITH_IMAGE='$DOCKER_IMAGE'
 export N_RUNS=1
 export RUN_NUMBER_OFFSET=$((run_num - 1))
+
+# New output structure environment variables
+export BENCHMARK_TYPE='$benchmark_type'
+export MODEL_DISPLAY_NAME='$model_display_name'
+export RUN_NUMBER=$run_num
+export INSTANCE_ID='$instance_id'
 
 bash ./evaluation/benchmarks/multi_swe_bench/scripts/run_full_eval_with_s3.sh \\
     $model_config \\

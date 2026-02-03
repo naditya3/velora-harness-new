@@ -254,6 +254,59 @@ echo "Instance ID: $INSTANCE_ID"
 # Export INSTANCE_ID for later use in Python scripts
 export INSTANCE_ID
 
+# ============================================
+# NEW OUTPUT DIRECTORY STRUCTURE
+# Trajectory_results/{Benchmark}/{Instance_ID}/{Model}/Run{N}/
+# ============================================
+
+# Get benchmark type from environment or auto-detect
+if [ -z "$BENCHMARK_TYPE" ]; then
+  # Auto-detect based on dataset path or instance_id
+  if [[ "$DATASET_ABS" == *"swelancer"* ]] || [[ "$DATASET_ABS" == *"expensify"* ]] || [[ "$DATASET_ABS" == *"Expensify"* ]]; then
+    BENCHMARK_TYPE="RCT"
+  elif [[ "$DATASET_ABS" == *"swe_lite"* ]] || [[ "$DATASET_ABS" == *"swe-bench-lite"* ]]; then
+    BENCHMARK_TYPE="Lite"
+  elif [[ "$DATASET_ABS" == *"lst"* ]] || [[ "$DATASET_ABS" == *"large_scale"* ]]; then
+    BENCHMARK_TYPE="LST"
+  elif [[ "$INSTANCE_ID" =~ ^[0-9]{16,}$ ]]; then
+    # 17-digit timestamp-like IDs are RCT (Expensify)
+    BENCHMARK_TYPE="RCT"
+  else
+    BENCHMARK_TYPE="SWE-hard"
+  fi
+fi
+
+# Get model display name from environment or extract from MODEL_CONFIG
+if [ -z "$MODEL_DISPLAY_NAME" ]; then
+  case "$MODEL_CONFIG" in
+    llm.gemini*) MODEL_DISPLAY_NAME="Gemini" ;;
+    llm.claude*) MODEL_DISPLAY_NAME="Claude" ;;
+    llm.gpt*) MODEL_DISPLAY_NAME="GPT" ;;
+    *) MODEL_DISPLAY_NAME="${MODEL_CONFIG#llm.}" ;;
+  esac
+fi
+
+# Get run number from environment or default to 1
+RUN_NUMBER=${RUN_NUMBER:-1}
+
+# Construct new output directory path
+NEW_OUTPUT_BASE="evaluation/evaluation_outputs/Trajectory_results"
+NEW_OUTPUT_DIR="${NEW_OUTPUT_BASE}/${BENCHMARK_TYPE}/${INSTANCE_ID}/${MODEL_DISPLAY_NAME}/Run${RUN_NUMBER}"
+
+echo ""
+echo "Output Structure:"
+echo "  Benchmark Type: $BENCHMARK_TYPE"
+echo "  Model: $MODEL_DISPLAY_NAME"
+echo "  Run Number: $RUN_NUMBER"
+echo "  Output Directory: $NEW_OUTPUT_DIR"
+echo ""
+
+# Create output directory
+mkdir -p "$NEW_OUTPUT_DIR"
+
+# Export for use in trajectory generation
+export EVAL_OUTPUT_DIR="$(pwd)/$NEW_OUTPUT_DIR"
+
 # Extract image info
 IMAGE_URI=$(cat "$DATASET_ABS" | python3 -c "
 import sys, json
@@ -726,6 +779,7 @@ for i in $(seq 1 $N_RUNS); do
     --max-iterations $MAX_ITER \
     --eval-num-workers $NUM_WORKERS \
     --eval-note $current_eval_note \
+    --eval-output-dir $EVAL_OUTPUT_DIR \
     --dataset $DATASET_ABS \
     --split $SPLIT \
     --eval-n-limit $EVAL_LIMIT"
@@ -736,55 +790,39 @@ for i in $(seq 1 $N_RUNS); do
 done
 
 # ============================================
-# FIND OUTPUT FILE
+# LOCATE OUTPUT FILE (using known output directory)
 # ============================================
 echo ""
 echo "============================================"
 echo "LOCATING TRAJECTORY OUTPUT"
 echo "============================================"
 
-# Extract model name from config for path construction
-MODEL_NAME=$(grep -A 5 "\[$MODEL_CONFIG\]" config.toml | grep "model" | head -1 | sed 's/.*= *"\([^"]*\)".*/\1/' || echo "unknown")
-echo "Model name: $MODEL_NAME"
+# Use the known output directory from the new structure
+OUTPUT_DIR="$EVAL_OUTPUT_DIR"
+OUTPUT_FILE="${OUTPUT_DIR}/output.jsonl"
 
-# Find the output directory - search for directories containing output.jsonl
-OUTPUT_BASE="evaluation/evaluation_outputs/outputs"
+echo "Output directory: $OUTPUT_DIR"
+echo "Expected output file: $OUTPUT_FILE"
 
-# Find the actual output.jsonl file first - try with current_eval_note AND instance_id
-OUTPUT_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" 2>/dev/null | grep "${INSTANCE_ID}" | grep -E "${current_eval_note}" | head -1)
-
-if [ -z "$OUTPUT_FILE" ]; then
-  # Try alternate search by instance_id and iteration count
-  OUTPUT_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" 2>/dev/null | grep "${INSTANCE_ID}" | grep "maxiter_${MAX_ITER}" | head -1)
-fi
-
-if [ -z "$OUTPUT_FILE" ]; then
-  # Try search by instance_id only
-  OUTPUT_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" 2>/dev/null | grep "${INSTANCE_ID}" | head -1)
-fi
-
-if [ -z "$OUTPUT_FILE" ]; then
-  # Last resort: find most recent output.jsonl (sorted by modification time)
-  OUTPUT_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
-fi
-
-if [ -z "$OUTPUT_FILE" ]; then
-  echo "ERROR: Could not find output.jsonl!"
-  echo "Searching in: $OUTPUT_BASE"
-  find $OUTPUT_BASE -type f -name "output.jsonl" 2>/dev/null | tail -10
-  exit 1
-fi
-
-# Get the directory containing output.jsonl
-OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
-
-OUTPUT_FILE="$OUTPUT_DIR/output.jsonl"
-echo "Found output directory: $OUTPUT_DIR"
-echo "Output file: $OUTPUT_FILE"
-
+# Verify output file exists
 if [ ! -f "$OUTPUT_FILE" ]; then
-  echo "ERROR: Output file not found: $OUTPUT_FILE"
-  exit 1
+  echo "ERROR: Output file not found at expected path: $OUTPUT_FILE"
+  echo ""
+  echo "Searching for output.jsonl in evaluation_outputs..."
+  
+  # Fallback: search for the file (for backward compatibility)
+  OUTPUT_BASE="evaluation/evaluation_outputs"
+  FOUND_FILE=$(find $OUTPUT_BASE -type f -name "output.jsonl" 2>/dev/null | grep "${INSTANCE_ID}" | head -1)
+  
+  if [ -n "$FOUND_FILE" ]; then
+    OUTPUT_FILE="$FOUND_FILE"
+    OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
+    echo "Found output file at: $OUTPUT_FILE"
+  else
+    echo "ERROR: Could not find output.jsonl anywhere!"
+    find $OUTPUT_BASE -type f -name "output.jsonl" 2>/dev/null | tail -10
+    exit 1
+  fi
 fi
 
 # Export OUTPUT_DIR for later use

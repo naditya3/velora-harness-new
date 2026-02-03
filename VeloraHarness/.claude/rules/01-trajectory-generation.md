@@ -127,25 +127,42 @@ export RUNTIME_CONTAINER_IMAGE="skip"  # ❌ WRONG - causes Docker to pull "skip
 
 ## **Output Structure (Complete)**
 
+The standardized output structure follows this hierarchy:
+
 ```
-evaluation/evaluation_outputs/outputs/
-└── <dataset_name>-train/
-    └── CodeActAgent/
-        └── <model>_maxiter_<N>_<eval_note>/
-            ├── output.jsonl              ← Trajectory (400KB+)
-            ├── metadata.json             ← Run config (1.5KB)
-            ├── llm_completions/          ← LLM logs (3MB+)
-            │   └── {instance_id}/
-            │       └── *.json (30-50 files)
-            ├── logs/                     ← Execution logs
-            ├── eval_pilot2_output.jsonl  ← Raw evaluation (400KB+)
-            └── eval_outputs/             ← OpenHands format
-                ├── report.json           ← Aggregate (8KB)
-                └── {instance_id}/
-                    ├── report.json       ← Instance report (8KB)
-                    ├── patch.diff        ← Git patch (varies)
-                    └── test_output.txt   ← Test logs (varies)
+evaluation/evaluation_outputs/
+└── Trajectory_results/
+    └── {Benchmark}/                     ← RCT, SWE-hard, LST, Lite
+        └── {Instance_ID}/               ← e.g., 1769880766122899
+            └── {Model}/                 ← Gemini, Claude, GPT
+                └── Run{N}/              ← Run1 through Run8 (for pass@8)
+                    ├── output.jsonl              ← Trajectory (400KB+)
+                    ├── metadata.json             ← Run config (1.5KB)
+                    ├── llm_completions/          ← LLM logs (3MB+)
+                    │   └── {instance_id}/
+                    │       └── *.json (30-50 files)
+                    ├── logs/                     ← Execution logs
+                    ├── eval_pilot2_output.jsonl  ← Raw evaluation (400KB+)
+                    └── eval_outputs/             ← OpenHands format
+                        ├── report.json           ← Aggregate (8KB)
+                        └── {instance_id}/
+                            ├── report.json       ← Instance report (8KB)
+                            ├── patch.diff        ← Git patch (varies)
+                            ├── test_output.txt   ← Test logs (varies)
+                            ├── run_instance.log  ← Execution log
+                            └── eval.sh           ← Test command used
 ```
+
+### Benchmark Types
+
+| Benchmark | Description | Examples |
+|-----------|-------------|----------|
+| **RCT** | Real Coding Tasks (Expensify/SWE-Lancer) | 1769880766122899 |
+| **SWE-hard** | Standard Multi-SWE-Bench | iterative__dvc_0.92.0_0.92.1 |
+| **LST** | Large-Scale SWE Tasks | large scale Python tasks |
+| **Lite** | SWE-Bench Lite (300 tasks) | subset of SWE-Bench |
+
+See `docs/OUTPUT_STRUCTURE.md` for complete documentation.
 
 ---
 
