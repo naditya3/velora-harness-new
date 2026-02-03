@@ -67,5 +67,9 @@ timeout = 120
 # Condensers control how conversation history is managed
 ##############################################################################
 [condenser]
-type = "noop"
+type = "llm"
+llm_config = "claudeNonR"  # Use Claude Sonnet for history condensation
+max_size = 100  # Maximum conversation size before condensation
+keep_first = 2  # Keep first 2 messages
+max_event_length = 10000  # Maximum length per event
 
