@@ -26,7 +26,7 @@ default_agent = "CodeActAgent"
 # Claude Sonnet 4.5 - Standard Inference (Non-Reasoning)
 [llm.claudeNonR]
 model = "claude-sonnet-4-5-20250929"
-api_key = "<YOUR_ANTHROPIC_API_KEY>"
+api_key = "API-KEY"
 temperature = 1.0
 timeout = 600
 num_retries = 8
