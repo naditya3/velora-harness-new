@@ -1225,16 +1225,13 @@ def grade_test_results(
                     results['fail_to_pass_failed'].append(test)
                 matched = True
                 break
-        
+
         if not matched:
-            is_failed = any(test_names_match(test, f) for f in failed_or_error_tests)
-            
-            if is_failed:
-                logger.info(f"F2P test matched as failed/error: {test}")
-                results['fail_to_pass_failed'].append(test)
-            else:
-                logger.info(f"F2P test not in error/failure section, assuming passed: {test}")
-                results['fail_to_pass_success'].append(test)
+            # FIX: F2P tests that are missing from test output should be marked as FAILED
+            # These tests were supposed to fail at baseline and pass after patch
+            # If they don't appear in results, the patch didn't fix them
+            logger.info(f"F2P test not found in results, marking as failed: {test}")
+            results['fail_to_pass_failed'].append(test)
     
     # Grade P2P tests
     for test in pass_to_pass:
@@ -1247,16 +1244,13 @@ def grade_test_results(
                     results['pass_to_pass_failed'].append(test)
                 matched = True
                 break
-        
+
         if not matched:
-            is_failed = any(test_names_match(test, f) for f in failed_or_error_tests)
-            
-            if is_failed:
-                logger.info(f"P2P test matched as failed/error: {test}")
-                results['pass_to_pass_failed'].append(test)
-            else:
-                logger.info(f"P2P test not in error/failure section, assuming passed: {test}")
-                results['pass_to_pass_success'].append(test)
+            # FIX: P2P tests that are missing from output should be marked as FAILED
+            # These tests should pass at both baseline and post-patch
+            # If missing, the patch likely broke them (regression)
+            logger.info(f"P2P test not found in results, marking as failed (regression): {test}")
+            results['pass_to_pass_failed'].append(test)
     
     return results
 
@@ -1495,10 +1489,26 @@ def evaluate_instance(
         
         # Grade results
         grade_results = grade_test_results(test_status_map, fail_to_pass, pass_to_pass)
-        
+
+        # FIX: Validate test output - ensure tests actually ran
+        test_execution_succeeded = True
+        if len(full_output) < 10:
+            logger.warning("Test output is too short - tests may not have run")
+            test_execution_succeeded = False
+        if "No such file or directory" in full_output or "command not found" in full_output:
+            logger.warning("Test execution errors detected in output")
+            test_execution_succeeded = False
+        if not test_status_map:
+            logger.warning("No tests were parsed from output")
+            test_execution_succeeded = False
+        if grade_results['tests_passed'] + grade_results['tests_failed'] + grade_results['tests_error'] == 0:
+            logger.warning("No tests passed, failed, or errored - tests may not have run")
+            test_execution_succeeded = False
+
         all_f2p_pass = len(grade_results['fail_to_pass_failed']) == 0 and len(grade_results['fail_to_pass_success']) > 0
         all_p2p_pass = len(grade_results['pass_to_pass_failed']) == 0
-        resolved = all_f2p_pass and all_p2p_pass
+        # Only mark as resolved if tests actually ran successfully
+        resolved = test_execution_succeeded and all_f2p_pass and all_p2p_pass
         
         return EvalReport(
             instance_id=instance_id,
