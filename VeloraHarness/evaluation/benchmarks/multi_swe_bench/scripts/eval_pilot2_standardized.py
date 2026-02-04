@@ -418,7 +418,7 @@ def parse_log_playwright(log: str, grading_spec: Any = None) -> Dict[str, str]:
 
 def parse_log_cargo_test(log: str, grading_spec: Any = None) -> Dict[str, str]:
     """Parser for Rust cargo test output."""
-    results: Dict[str, TestStatus] = {}
+    results: Dict[str, str] = {}
     test_pattern = re.compile(
         r"^test\s+([^\s]+)\s+\.\.\.\s+(ok|FAILED|ignored)", re.MULTILINE
     )
@@ -430,7 +430,7 @@ def parse_log_cargo_test(log: str, grading_spec: Any = None) -> Dict[str, str]:
         elif status == "FAILED":
             results[test_name] = TestStatus.FAILED
         # ignored tests are skipped
-    return {test_name: test_status.value for test_name, test_status in results.items()}
+    return results
 
 
 # ============================================================
