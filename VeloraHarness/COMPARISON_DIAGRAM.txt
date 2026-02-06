@@ -1,0 +1,175 @@
+================================================================================
+           OLD (BATCH) vs NEW (INSTANCE-WISE) COMPARISON
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        OLD BATCH SYSTEM                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    Dataset (75 instances)
+           ▼
+    ┌──────────────┐
+    │  run_infer   │  ← Processes ALL instances together
+    │  (Model: opus)│
+    └──────┬───────┘
+           ▼
+    ┌──────────────────────────────────────────┐
+    │  Single output file (mixed instances)   │
+    │  - instance_1 trajectory                │
+    │  - instance_2 trajectory                │
+    │  - instance_3 trajectory                │
+    │  ... all 75 mixed together              │
+    └──────────────────────────────────────────┘
+
+    Problems:
+    ❌ Cannot track individual instances
+    ❌ Cannot retry single failed instance
+    ❌ Hard to debug specific failures
+    ❌ No granular progress tracking
+    ❌ All-or-nothing approach
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     NEW INSTANCE-WISE SYSTEM                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    Dataset (75 instances)
+           ▼
+    ┌──────────────┐
+    │  Instance 1  │──→  run_infer  ──→  trajectories/opus/instance_1/
+    │  Instance 2  │──→  run_infer  ──→  trajectories/opus/instance_2/
+    │  Instance 3  │──→  run_infer  ──→  trajectories/opus/instance_3/
+    │     ...      │         ...              ...
+    │  Instance 75 │──→  run_infer  ──→  trajectories/opus/instance_75/
+    └──────────────┘
+
+    Each instance produces:
+    ├── trajectories/opus/instance_XXX/
+    │   ├── output.jsonl           ← Individual trajectory
+    │   └── eval_output.jsonl      ← Individual evaluation
+    ├── logs/opus/instance_XXX.log ← Individual log
+    └── progress/opus_XXX.status   ← Individual status
+
+    Benefits:
+    ✅ Track each instance separately
+    ✅ Retry only failed instances
+    ✅ Easy debugging per instance
+    ✅ Real-time per-instance progress
+    ✅ Parallel execution possible
+    ✅ Resume from failures
+
+
+================================================================================
+                            EXECUTION COMPARISON
+================================================================================
+
+OLD BATCH (run_multi_model_trajectories.sh):
+┌────────────────────────────────────────────┐
+│  Opus: [█████████████████] 75/75 (batch)  │
+│  GPT:  [█████████████████] 75/75 (batch)  │
+│  Kimi: [█████████████████] 75/75 (batch)  │
+│  Qwen: [█████████████████] 75/75 (batch)  │
+└────────────────────────────────────────────┘
+  - Each bar represents ALL 75 instances
+  - No visibility into individual progress
+  - One failure = unclear which instance failed
+
+
+NEW INSTANCE-WISE (run_instance_wise_trajectories.sh):
+┌────────────────────────────────────────────────────────────────────────────┐
+│ Opus: [✓][✓][✓][✗][✓][⏳][✓]... 68✓ 5✗ 2⏱                                │
+│       │  │  │  │  │  │  │                                                 │
+│       1  2  3  4  5  6  7... instance numbers                             │
+│                                                                            │
+│ GPT:  [✓][✓][✓][✓][✓][✓][✓]... 70✓ 3✗ 2⏱                                │
+│                                                                            │
+│ Kimi: [✓][✓][✗][✓][✓][✓][✓]... 72✓ 2✗ 1⏱                                │
+│                                                                            │
+│ Qwen: [✓][✓][✓][✓][✓][✓][✓]... 71✓ 4✗ 0⏱                                │
+└────────────────────────────────────────────────────────────────────────────┘
+  Legend: ✓=Success  ✗=Failed  ⏳=Timeout  ⏱=In Progress
+
+  - Each box is ONE instance
+  - Know EXACTLY which instances failed
+  - Can retry instance 4 for Opus specifically
+
+
+================================================================================
+                           OUTPUT STRUCTURE COMPARISON
+================================================================================
+
+OLD (Relative Paths):                  NEW (Absolute Paths):
+────────────────────────────────────   ─────────────────────────────────────
+evaluation/                            /home/ec2-user/VeloraTrajectories/
+└── outputs/                           └── outputs/
+    └── opus_output.jsonl                  └── trajectories/
+        (mixed, 75 instances)                  └── session_20260206_120000/
+                                                   ├── opus/
+                                                   │   ├── instance_1/
+                                                   │   ├── instance_2/
+                                                   │   └── ... (75 total)
+                                                   ├── gpt/
+                                                   ├── kimi/
+                                                   └── qwen/
+
+
+================================================================================
+                            FAILURE RECOVERY COMPARISON
+================================================================================
+
+OLD BATCH SYSTEM:
+  Instance 42 fails ──→  ❌ Must rerun ALL 75 instances
+                         ❌ Cannot identify which failed until end
+                         ❌ Waste resources re-running successful ones
+
+NEW INSTANCE-WISE SYSTEM:
+  Instance 42 fails ──→  ✅ Rerun ONLY instance 42
+                         ✅ Know immediately which failed
+                         ✅ Save time and resources
+
+
+Example:
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Session 1: Run all 75 instances                                         │
+│   Result: 70 Success, 5 Failed                                          │
+│                                                                          │
+│ ./instance_trajectory_manager.py retry --create-dataset retry.jsonl     │
+│   → Creates dataset with only 5 failed instances                        │
+│                                                                          │
+│ Session 2: Run only 5 failed instances                                  │
+│   Result: 4 Success, 1 Failed                                           │
+│                                                                          │
+│ Total: 74/75 success with minimal wasted compute!                       │
+└──────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+                         RESOURCE USAGE COMPARISON
+================================================================================
+
+                     OLD (Batch)           NEW (Instance-wise)
+                     ───────────           ────────────────────
+Memory per run       High (all 75)         Low (1 at a time)
+Disk I/O             Burst                 Distributed
+Failure impact       Total restart         Single retry
+Monitoring           Aggregate only        Per-instance
+Parallelization      None                  Configurable (1-16)
+Resume capability    None                  Built-in
+Success tracking     End only              Real-time
+
+
+================================================================================
+                              SUMMARY
+================================================================================
+
+The NEW instance-wise system is:
+  🎯 More precise (track each instance)
+  🔄 More resilient (retry only failures)
+  ⚡ More efficient (parallel execution)
+  📊 More observable (detailed tracking)
+  🛠️  More maintainable (absolute paths)
+  🚀 Production-ready (comprehensive error handling)
+
+Ready to use: ./run_instance_wise_trajectories.sh
+
+================================================================================

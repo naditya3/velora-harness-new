@@ -29,12 +29,14 @@ ENV PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 # Fix for old Debian versions with expired GPG keys (e.g., Debian Stretch)
 # Use trusted=yes for archived repos and disable validity check
-RUN if grep -q "archive.debian.org" /etc/apt/sources.list 2>/dev/null; then \
-        echo "Fixing old Debian GPG key issues..." && \
-        echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until && \
-        sed -i 's/deb http/deb [trusted=yes] http/g' /etc/apt/sources.list 2>/dev/null || true && \
+RUN set -e; \
+    if [ -f /etc/apt/sources.list ] && grep -q "archive.debian.org" /etc/apt/sources.list 2>/dev/null; then \
+        echo "Fixing old Debian GPG key issues..."; \
+        echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until; \
+        sed -i 's/deb http/deb [trusted=yes] http/g' /etc/apt/sources.list 2>/dev/null || true; \
         sed -i 's/deb-src http/deb-src [trusted=yes] http/g' /etc/apt/sources.list 2>/dev/null || true; \
-    fi
+    fi; \
+    exit 0
 
 # Install base system dependencies
 

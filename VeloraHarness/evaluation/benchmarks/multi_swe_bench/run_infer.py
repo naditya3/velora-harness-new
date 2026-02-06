@@ -12,6 +12,10 @@ import openhands.agenthub
 from evaluation.benchmarks.swe_bench.resource.mapping import (
     get_instance_resource_factor,
 )
+from evaluation.utils.image_utils import (
+    preload_image_mapping,
+    translate_image_uri,
+)
 from evaluation.utils.shared import (
     EvalException,
     EvalMetadata,
@@ -94,13 +98,10 @@ def get_instruction(instance: pd.Series, metadata: EvalMetadata):
     is_swelancer = use_swelancer_monolith or 'expensify' in str(repo).lower()
     
     # Set the repo path based on task type
-    if is_swelancer:
-        repo_path = '/app/repo'
-        repo_display = 'repo'
-    else:
-        repo_path = f'/workspace/{workspace_dir_name}'
-        repo_display = workspace_dir_name
-    
+
+    repo_path = '/app/repo'
+    repo_display = 'repo'
+
     # Prepare instruction
 
     # Instruction based on Anthropic's official trajectory
@@ -354,31 +355,41 @@ if USE_SWELANCER_MONOLITH:
 def get_instance_docker_image(instance: pd.Series):
     """
     Get the Docker image for a given instance.
-    
+
     Priority:
     1. SWE-Lancer monolith mode (if USE_SWELANCER_MONOLITH=true)
     2. monolith_image field in dataset
-    3. task_specific_image field in dataset  
-    4. image_storage_uri field in dataset
+    3. task_specific_image field in dataset
+    4. image_storage_uri field in dataset (with automatic translation to ECR)
     5. Fallback to constructing image name from repo/instance_id
     """
     # Check for SWE-Lancer monolith mode
     if USE_SWELANCER_MONOLITH:
         logger.info(f'Using SWE-Lancer monolith image: {SWELANCER_MONOLITH_IMAGE}')
         return SWELANCER_MONOLITH_IMAGE
-    
+
     # Check for monolith_image field (SWE-Lancer datasets)
     monolith_image = instance.get('monolith_image', '')
     if monolith_image and os.environ.get('PREFER_MONOLITH', 'false').lower() == 'true':
         logger.info(f'Using monolith_image from dataset: {monolith_image}')
+        # Translate to ECR if mapping is available
+        translated_image = translate_image_uri(monolith_image)
+        if translated_image != monolith_image:
+            logger.info(f'Translated monolith_image to ECR: {translated_image}')
+            return translated_image
         return monolith_image
-    
+
     # Check for task_specific_image field (SWE-Lancer datasets)
     task_image = instance.get('task_specific_image', '')
     if task_image:
         logger.info(f'Using task_specific_image from dataset: {task_image}')
+        # Translate to ECR if mapping is available
+        translated_image = translate_image_uri(task_image)
+        if translated_image != task_image:
+            logger.info(f'Translated task_specific_image to ECR: {translated_image}')
+            return translated_image
         return task_image
-    
+
     # Check for image_storage_uri (preferred method from dataset)
     # Skip S3 URIs - those are for downloading tars, not valid Docker image references.
     # The shell script handles S3 download + docker load + tagging separately.
@@ -387,10 +398,15 @@ def get_instance_docker_image(instance: pd.Series):
         image_uri_str = str(image_uri).strip()
         if not image_uri_str.startswith('s3://'):
             logger.info(f'Using image_storage_uri from dataset: {image_uri_str}')
+            # Translate internal URI to ECR URI using image_mapping.csv
+            translated_image = translate_image_uri(image_uri_str)
+            if translated_image != image_uri_str:
+                logger.info(f'Translated image_storage_uri to ECR: {translated_image}')
+                return translated_image
             return image_uri_str
         else:
             logger.info(f'Skipping S3 image_storage_uri (not a Docker image ref): {image_uri_str}')
-    
+
     # Fallback to constructing image name
     if LANGUAGE == 'python':
         image_name = 'sweb.eval.x86_64.' + instance['instance_id']
@@ -430,7 +446,8 @@ def get_config(
     sandbox_config.enable_auto_lint = True
     sandbox_config.use_host_network = False
     # Add platform to the sandbox config to solve issue 4401
-    sandbox_config.platform = 'linux/amd64'
+    # Changed to linux/arm64 for aarch64 architecture
+    sandbox_config.platform = 'linux/arm64'
     # Velora3 fix: Use pre-built runtime to skip apt-get build issues
     if RUNTIME_CONTAINER_IMAGE:
         sandbox_config.runtime_container_image = RUNTIME_CONTAINER_IMAGE
@@ -1063,6 +1080,15 @@ if __name__ == '__main__':
     )
     args, _ = parser.parse_known_args()
 
+    # Preload image mapping for URI translation
+    # This loads the image_mapping.csv once at startup for efficient lookups
+    image_mapping_path = os.environ.get('IMAGE_MAPPING_CSV', None)
+    num_mappings = preload_image_mapping(image_mapping_path)
+    if num_mappings > 0:
+        logger.info(f'Preloaded {num_mappings} image URI mappings for ECR translation')
+    else:
+        logger.info('No image URI mappings loaded - translation will be disabled')
+
     # NOTE: It is preferable to load datasets from huggingface datasets and perform post-processing
     # so we don't need to manage file uploading to OpenHands's repo
     # dataset = load_dataset(args.dataset, split=args.split)
@@ -1137,11 +1163,11 @@ if __name__ == '__main__':
         swe_bench_tests, output_file, args.eval_n_limit, filter_func=filter_func
     )
 
-    if len(instances) > 0 and not isinstance(
-        instances['FAIL_TO_PASS'][instances['FAIL_TO_PASS'].index[0]], str
-    ):
-        for col in ['PASS_TO_PASS', 'FAIL_TO_PASS']:
-            instances[col] = instances[col].apply(lambda x: str(x))
+    # Check if PASS_TO_PASS and FAIL_TO_PASS columns exist (SWE-bench specific)
+    if len(instances) > 0 and 'PASS_TO_PASS' in instances.columns and 'FAIL_TO_PASS' in instances.columns:
+        if not isinstance(instances['FAIL_TO_PASS'][instances['FAIL_TO_PASS'].index[0]], str):
+            for col in ['PASS_TO_PASS', 'FAIL_TO_PASS']:
+                instances[col] = instances[col].apply(lambda x: str(x))
     # if LANGUAGE == "java": ##TODO:适配多语言的版本
     #     for col in ['issue_numbers', 'created_at']:
     #         instances[col] = instances[col].apply(lambda x: str(x))

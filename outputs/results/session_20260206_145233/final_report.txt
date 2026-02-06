@@ -1,0 +1,66 @@
+================================================================================
+  Final Results Summary
+================================================================================
+Session ID: session_20260206_145233
+Dataset: repomate_100_tasks.jsonl
+Total Instances Processed: 1
+Completion Time: Fri Feb  6 14:53:22 UTC 2026
+
+═══════════════════════════════════════
+  Claude Opus 4.6
+═══════════════════════════════════════
+Configuration: opus
+Total Instances: 1
+Successful: 1
+Failed: 0
+0
+Timed Out: 0
+0
+Success Rate: 100.00%
+Completion Time: Fri Feb  6 14:52:38 UTC 2026
+
+═══════════════════════════════════════
+  GPT-5.2
+═══════════════════════════════════════
+Configuration: gpt
+Total Instances: 1
+Successful: 1
+Failed: 0
+0
+Timed Out: 0
+0
+Success Rate: 100.00%
+Completion Time: Fri Feb  6 14:52:52 UTC 2026
+
+═══════════════════════════════════════
+  Kimi K2.5
+═══════════════════════════════════════
+Configuration: kimi
+Total Instances: 1
+Successful: 1
+Failed: 0
+0
+Timed Out: 0
+0
+Success Rate: 100.00%
+Completion Time: Fri Feb  6 14:53:07 UTC 2026
+
+═══════════════════════════════════════
+  Qwen 3 Coder Plus
+═══════════════════════════════════════
+Configuration: qwen
+Total Instances: 1
+Successful: 1
+Failed: 0
+0
+Timed Out: 0
+0
+Success Rate: 100.00%
+Completion Time: Fri Feb  6 14:53:22 UTC 2026
+
+Output Locations:
+  Trajectories: /home/ec2-user/VeloraTrajectories/outputs/trajectories/session_20260206_145233
+  Logs: /home/ec2-user/VeloraTrajectories/outputs/logs/session_20260206_145233
+  Results: /home/ec2-user/VeloraTrajectories/outputs/results/session_20260206_145233
+
+================================================================================

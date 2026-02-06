@@ -1,0 +1,5 @@
+Model,Instance_ID,Status,Duration_Seconds,Exit_Code
+gpt_task_001,task_001_1841270650076475,SUCCESS,5,0
+kimi_task_001,task_001_1841270650076475,SUCCESS,5,0
+opus_task_001,task_001_1841270650076475,SUCCESS,5,0
+qwen_task_001,task_001_1841270650076475,SUCCESS,5,0

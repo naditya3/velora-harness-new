@@ -20,11 +20,13 @@ Key Features:
 Standard Flow (Python, PHP, Ruby):
 1. Start Docker container
 2. Apply model patch
-3. Reset test files to clean state
-4. Apply golden test patch
-5. Run test command
-6. Parse output with appropriate parser
-7. Grade results against F2P/P2P
+3. Apply golden test patch
+4. Run test command
+5. Parse output with appropriate parser
+6. Grade results against F2P/P2P
+
+NOTE: Test file reset removed to align with official SWE-bench methodology.
+Official SWE-bench: model_patch → test_patch → run tests (no reset between)
 
 SWE-Lancer Flow (JavaScript/Playwright):
 1. Start SWE-Lancer container
@@ -1121,9 +1123,24 @@ def run_test_command(
         "fi; "
     )
     
+    # Environment setup: Try /saved/ENV first, fallback to conda if not found
+    env_setup = (
+        "if [ -f /saved/ENV ] || ls /saved/*/ENV 1> /dev/null 2>&1; then "
+        "  source /saved/ENV 2>/dev/null || source /saved/*/ENV 2>/dev/null; "
+        "elif [ -f /opt/miniconda3/bin/activate ]; then "
+        "  source /opt/miniconda3/bin/activate 2>/dev/null && "
+        "  CONDA_ENV=$(conda env list 2>/dev/null | grep -v '^#' | grep -v 'base' | head -1 | awk '{print $1}') && "
+        "  if [ ! -z \"$CONDA_ENV\" ]; then conda activate $CONDA_ENV 2>/dev/null; fi; "
+        "elif [ -f /opt/conda/bin/activate ]; then "
+        "  source /opt/conda/bin/activate 2>/dev/null && "
+        "  CONDA_ENV=$(conda env list 2>/dev/null | grep -v '^#' | grep -v 'base' | head -1 | awk '{print $1}') && "
+        "  if [ ! -z \"$CONDA_ENV\" ]; then conda activate $CONDA_ENV 2>/dev/null; fi; "
+        "fi; "
+    )
+
     # Build the full command
     full_command = (
-        f"source /saved/ENV 2>/dev/null || source /saved/*/ENV 2>/dev/null || true; "
+        f"{env_setup}"
         f"{unset_proxy}"
         f"{guard_symlink}"
         f"cd {repo_directory} && {test_exec}"
@@ -1456,22 +1473,11 @@ def evaluate_instance(
                 
                 if returncode != 0 and "FAILED" in stdout:
                     logger.warning("Patch application may have failed")
-            
-            # Reset test files
-            logger.info("Resetting test files to clean state...")
-            
-            run_docker_command(
-                container_name,
-                "cd /app/repo && git clean -fd '**/test*.py' '**/tests/' '**/*_test.py' 2>/dev/null || true"
-            )
-            
-            run_docker_command(
-                container_name,
-                "cd /app/repo && git checkout -- '**/test*.py' '**/tests/**' '**/*_test.py' 2>/dev/null || true"
-            )
-            
-            logger.info("Test files reset complete")
-            
+
+            # NOTE: Test file reset removed to align with official SWE-bench methodology
+            # Official SWE-bench applies: model_patch → test_patch → run tests
+            # Without resetting test files in between
+
             # Run test command with specific test targets (F2P + P2P)
             # This ensures pytest runs only the required tests
             returncode, stdout, stderr = run_test_command(

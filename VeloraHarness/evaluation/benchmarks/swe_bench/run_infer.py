@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+"""SWE-bench evaluation script with trajectory generation."""
+
+# Suppress pathspec GitWildMatchPattern deprecation warnings BEFORE any imports
+import warnings
+warnings.filterwarnings('ignore', category=DeprecationWarning, module='pathspec')
+
 import asyncio
 import copy
 import json
@@ -22,6 +29,10 @@ from evaluation.benchmarks.swe_bench.resource.swt_bench_constants import (
     MAP_REPO_TO_INSTALL,
     MAP_REPO_TO_TEST_FRAMEWORK_VERBOSE,
     MAP_VERSION_TO_INSTALL,
+)
+from evaluation.utils.image_utils import (
+    preload_image_mapping,
+    translate_image_uri,
 )
 from evaluation.utils.shared import (
     EvalException,
@@ -207,24 +218,36 @@ def get_config(
     instance: pd.Series,
     metadata: EvalMetadata,
 ) -> OpenHandsConfig:
-    # We use a different instance image for the each instance of swe-bench eval
-    use_swebench_official_image = DATASET_TYPE != 'SWE-Gym'
-
-    base_container_image = get_instance_docker_image(
-        instance['instance_id'],
-        swebench_official_image=use_swebench_official_image,
-    )
-    logger.info(
-        f'Using instance container image: {base_container_image}. '
-        f'Please make sure this image exists. '
-        f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
-    )
+    # Check if instance has image_storage_uri field (e.g., repomate datasets)
+    # If so, use that directly instead of constructing from instance_id
+    image_uri = instance.get('image_storage_uri', '')
+    if image_uri and pd.notna(image_uri) and str(image_uri).strip() and not str(image_uri).startswith('s3://'):
+        image_uri_str = str(image_uri).strip()
+        logger.info(f'Using image_storage_uri from dataset: {image_uri_str}')
+        # Translate internal URI to ECR URI using image_mapping.csv
+        base_container_image = translate_image_uri(image_uri_str)
+        if base_container_image != image_uri_str:
+            logger.info(f'Translated image_storage_uri to ECR: {base_container_image}')
+    else:
+        # Fall back to constructing image name from instance_id (SWE-bench format)
+        use_swebench_official_image = DATASET_TYPE != 'SWE-Gym'
+        base_container_image = get_instance_docker_image(
+            instance['instance_id'],
+            swebench_official_image=use_swebench_official_image,
+        )
+        logger.info(
+            f'Using instance container image: {base_container_image}. '
+            f'Please make sure this image exists. '
+            f'Submit an issue on https://github.com/OpenHands/OpenHands if you run into any issues.'
+        )
 
     sandbox_config = get_default_sandbox_config_for_eval()
     sandbox_config.base_container_image = base_container_image
     sandbox_config.enable_auto_lint = True
     sandbox_config.use_host_network = False
     # Add platform to the sandbox config to solve issue 4401
+    # Force amd64 platform - QEMU emulation is enabled for ARM64 host
+    # ECR base images are built for amd64 only
     sandbox_config.platform = 'linux/amd64'
     sandbox_config.remote_runtime_resource_factor = get_instance_resource_factor(
         dataset_name=metadata.dataset,
@@ -771,9 +794,22 @@ if __name__ == '__main__':
 
     args, _ = parser.parse_known_args()
 
+    # Preload image mapping for URI translation
+    # This loads the image_mapping.csv once at startup for efficient lookups
+    image_mapping_path = os.environ.get('IMAGE_MAPPING_CSV', None)
+    num_mappings = preload_image_mapping(image_mapping_path)
+    if num_mappings > 0:
+        logger.info(f'Preloaded {num_mappings} image URI mappings for ECR translation')
+    else:
+        logger.info('No image URI mappings loaded - translation will be disabled')
+
     # NOTE: It is preferable to load datasets from huggingface datasets and perform post-processing
     # so we don't need to manage file uploading to OpenHands's repo
-    dataset = load_dataset(args.dataset, split=args.split)
+    # Handle JSONL files explicitly
+    if args.dataset.endswith(('.jsonl', '.json')):
+        dataset = load_dataset('json', data_files=args.dataset, split=args.split)
+    else:
+        dataset = load_dataset(args.dataset, split=args.split)
 
     # Set the global dataset type based on dataset name
     set_dataset_type(args.dataset)
@@ -861,11 +897,11 @@ if __name__ == '__main__':
     if not ITERATIVE_EVAL_MODE:
         # load the dataset
         instances = prepare_dataset(swe_bench_tests, output_file, args.eval_n_limit)
-        if len(instances) > 0 and not isinstance(
-            instances['PASS_TO_PASS'][instances['PASS_TO_PASS'].index[0]], str
-        ):
-            for col in ['PASS_TO_PASS', 'FAIL_TO_PASS']:
-                instances[col] = instances[col].apply(lambda x: str(x))
+        # Check if PASS_TO_PASS and FAIL_TO_PASS columns exist (SWE-bench specific)
+        if len(instances) > 0 and 'PASS_TO_PASS' in instances.columns and 'FAIL_TO_PASS' in instances.columns:
+            if not isinstance(instances['PASS_TO_PASS'][instances['PASS_TO_PASS'].index[0]], str):
+                for col in ['PASS_TO_PASS', 'FAIL_TO_PASS']:
+                    instances[col] = instances[col].apply(lambda x: str(x))
 
         run_evaluation(
             instances,
@@ -906,11 +942,11 @@ if __name__ == '__main__':
             instances = prepare_dataset(
                 swe_bench_tests, cur_output_file, args.eval_n_limit, eval_ids=eval_ids
             )
-            if len(instances) > 0 and not isinstance(
-                instances['PASS_TO_PASS'][instances['PASS_TO_PASS'].index[0]], str
-            ):
-                for col in ['PASS_TO_PASS', 'FAIL_TO_PASS']:
-                    instances[col] = instances[col].apply(lambda x: str(x))
+            # Check if PASS_TO_PASS and FAIL_TO_PASS columns exist (SWE-bench specific)
+            if len(instances) > 0 and 'PASS_TO_PASS' in instances.columns and 'FAIL_TO_PASS' in instances.columns:
+                if not isinstance(instances['PASS_TO_PASS'][instances['PASS_TO_PASS'].index[0]], str):
+                    for col in ['PASS_TO_PASS', 'FAIL_TO_PASS']:
+                        instances[col] = instances[col].apply(lambda x: str(x))
 
             # Run evaluation - but save them to cur_output_file
             logger.info(

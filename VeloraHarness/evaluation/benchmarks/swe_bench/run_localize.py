@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+"""SWE-bench localization script."""
+
+# Suppress pathspec GitWildMatchPattern deprecation warnings BEFORE any imports
+import warnings
+warnings.filterwarnings('ignore', category=DeprecationWarning, module='pathspec')
+
 import asyncio
 import json
 import os
@@ -188,6 +195,8 @@ def get_config(
     sandbox_config.enable_auto_lint = True
     sandbox_config.use_host_network = False
     # Add platform to the sandbox config to solve issue 4401
+    # Force amd64 platform - QEMU emulation is enabled for ARM64 host
+    # ECR base images are built for amd64 only
     sandbox_config.platform = 'linux/amd64'
     sandbox_config.remote_runtime_resource_factor = get_instance_resource_factor(
         dataset_name=metadata.dataset,

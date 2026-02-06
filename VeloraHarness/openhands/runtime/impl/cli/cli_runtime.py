@@ -16,10 +16,35 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from binaryornot.check import is_binary
-from openhands_aci.editor.editor import OHEditor
-from openhands_aci.editor.exceptions import ToolError
-from openhands_aci.editor.results import ToolResult
-from openhands_aci.utils.diff import get_diff
+try:
+    from openhands_aci.editor.editor import OHEditor
+    from openhands_aci.editor.exceptions import ToolError
+    from openhands_aci.editor.results import ToolResult
+    from openhands_aci.utils.diff import get_diff
+except ImportError:
+    # Fallback stub implementations when openhands-aci is not available
+    import difflib
+
+    class ToolError(Exception):
+        pass
+
+    class ToolResult:
+        def __init__(self, output='', error='', exit_code=0):
+            self.output = output
+            self.error = error
+            self.exit_code = exit_code
+
+    class OHEditor:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    def get_diff(old_content: str, new_content: str, path: str = '') -> str:
+        """Simple fallback diff implementation using difflib"""
+        old_lines = old_content.splitlines(keepends=True)
+        new_lines = new_content.splitlines(keepends=True)
+        diff = difflib.unified_diff(old_lines, new_lines, fromfile=f'a/{path}', tofile=f'b/{path}')
+        return ''.join(diff)
+
 from pydantic import SecretStr
 
 from openhands.core.config import OpenHandsConfig

@@ -1,0 +1,103 @@
+================================================================================
+                    TEMPERATURE CONFIGURATION SUMMARY
+================================================================================
+
+✅ ALL MODELS SET TO TEMPERATURE = 1.0
+
+This ensures:
+  • Diverse trajectory generation
+  • Proper pass@k evaluation
+  • Multiple solution approaches
+  • Realistic model behavior
+
+================================================================================
+CURRENT CONFIGURATION (Verified)
+================================================================================
+
+Model              Temperature    Status
+───────────────────────────────────────────────
+Claude Opus 4.6    1.0           ✓
+Claude Sonnet 4.5  1.0           ✓
+GPT-5.2            1.0           ✓
+Kimi K2.5          1.0           ✓
+Qwen 3 Coder       1.0           ✓
+Gemini 3 Pro       1.0           ✓
+
+All 6 models configured correctly!
+
+================================================================================
+VERIFICATION
+================================================================================
+
+Quick check:
+  ./verify_temperature.sh
+
+Auto-verification on script startup:
+  ./run_instance_wise_trajectories.sh
+  (checks temperature automatically)
+
+================================================================================
+WHY TEMPERATURE = 1.0?
+================================================================================
+
+Temperature controls randomness:
+  0.0 = Deterministic (always same output)
+  1.0 = Balanced (recommended for trajectories) ← WE USE THIS
+  2.0 = Maximum randomness (can be incoherent)
+
+Benefits at 1.0:
+  ✓ Each run produces different solution paths
+  ✓ Better exploration of solution space
+  ✓ Enables pass@8, pass@16 evaluation
+  ✓ Discovers creative solutions
+  ✓ Mirrors real developer behavior
+
+================================================================================
+LOCATION OF SETTINGS
+================================================================================
+
+Config file:
+  /home/ec2-user/VeloraTrajectories/jaeger/VeloraHarness/config.toml
+
+Verification script:
+  /home/ec2-user/VeloraTrajectories/jaeger/VeloraHarness/verify_temperature.sh
+
+Full documentation:
+  /home/ec2-user/VeloraTrajectories/jaeger/VeloraHarness/TEMPERATURE_CONFIGURATION.md
+
+================================================================================
+EXAMPLE: TEMPERATURE IMPACT
+================================================================================
+
+With temperature=1.0 (Current):
+
+  Run 1: Solution using regex     → SUCCESS
+  Run 2: Solution using AST        → SUCCESS
+  Run 3: Solution using strings    → FAILED
+  
+  Pass@3 = 2/3 = 66.7%
+  ✓ Shows diverse approaches
+  ✓ Proper statistical evaluation
+
+With temperature=0.0 (Hypothetical):
+
+  Run 1: Solution using regex      → SUCCESS
+  Run 2: Solution using regex      → SUCCESS (same)
+  Run 3: Solution using regex      → SUCCESS (same)
+  
+  Pass@3 = 1/1 = 100% (misleading!)
+  ✗ No diversity
+  ✗ Can't evaluate multiple approaches
+
+================================================================================
+NO ACTION REQUIRED
+================================================================================
+
+✅ System is already configured correctly
+✅ All models have temperature=1.0
+✅ Auto-verification enabled
+
+To confirm:
+  ./verify_temperature.sh
+
+================================================================================

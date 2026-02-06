@@ -4,7 +4,17 @@ import tempfile
 from abc import ABC, abstractmethod
 from typing import Any
 
-from openhands_aci.utils.diff import get_diff  # type: ignore
+try:
+    from openhands_aci.utils.diff import get_diff  # type: ignore
+except ImportError:
+    # Fallback stub implementation when openhands-aci is not available
+    import difflib
+    def get_diff(old_content: str, new_content: str, path: str = '') -> str:
+        """Simple fallback diff implementation using difflib"""
+        old_lines = old_content.splitlines(keepends=True)
+        new_lines = new_content.splitlines(keepends=True)
+        diff = difflib.unified_diff(old_lines, new_lines, fromfile=f'a/{path}', tofile=f'b/{path}')
+        return ''.join(diff)
 
 from openhands.core.config import OpenHandsConfig
 from openhands.core.logger import openhands_logger as logger

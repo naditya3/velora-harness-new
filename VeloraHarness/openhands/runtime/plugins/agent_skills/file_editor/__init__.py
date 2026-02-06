@@ -3,6 +3,11 @@ its __call__.
 The implementation of the `EditTool` class can be found at: https://github.com/OpenHands/openhands-aci/.
 """
 
-from openhands_aci.editor import file_editor
+try:
+    from openhands_aci.editor import file_editor
+except ImportError:
+    # Fallback stub implementation when openhands-aci is not available
+    def file_editor(*args, **kwargs):
+        return "File editor not available (openhands-aci not installed)"
 
 __all__ = ['file_editor']

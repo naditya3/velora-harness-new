@@ -1,0 +1,45 @@
+╔══════════════════════════════════════════════════════════════════╗
+║                 VeloraTrajectories - Start Here                  ║
+╚══════════════════════════════════════════════════════════════════╝
+
+Welcome! You have a complete multi-model trajectory generation system.
+
+📚 DOCUMENTATION:
+  1. QUICK_REFERENCE.md  - Quick commands and API setup
+  2. API_CONFIGURATION.md - Detailed API key guide
+  3. GETTING_STARTED.md   - Complete walkthrough
+
+🔑 STEP 1: Configure API Keys
+  Edit: jaeger/VeloraHarness/config.toml
+  
+  You need keys from:
+  ✓ Anthropic    - Claude Opus 4.6    → console.anthropic.com
+  ✓ Moonshot     - Kimi 2.5           → platform.moonshot.cn
+  ✓ OpenRouter   - Qwen3 Coder        → openrouter.ai
+  ✓ OpenAI       - GPT-4o             → platform.openai.com
+  ✓ Google       - Gemini (optional)  → makersuite.google.com
+
+🧪 STEP 2: Test Setup
+  ./quick_test.sh
+
+🚀 STEP 3: Generate Trajectories
+  ./generate_trajectories.sh data/tasks.jsonl 10 outputs/
+
+📊 YOUR DATA:
+  - 230,833 tasks in CSV
+  - 300 Docker image samples
+  - Multi-language support (Go, Python, Java, Rust, C++)
+
+💡 QUICK COMMANDS:
+  Convert CSV:   python convert_csv_to_jsonl.py --csv "..." --output data/tasks.jsonl --limit 100
+  Generate:      ./generate_trajectories.sh data/tasks.jsonl 10 outputs/
+  Evaluate:      ./evaluate_trajectories.sh outputs data/tasks.jsonl mswebench
+  Analyze:       python analyze_results.py --output-dir outputs/
+
+🆘 NEED HELP?
+  Read: API_CONFIGURATION.md for detailed setup
+  Read: GETTING_STARTED.md for troubleshooting
+  
+═══════════════════════════════════════════════════════════════════
+
+Ready to start? Run: ./quick_test.sh
